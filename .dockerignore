@@ -1,0 +1,48 @@
+# .dockerignore for kvlite
+
+# Git
+.git
+.gitignore
+
+# Build artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Data and logs
+data/
+*.log
+*.db
+*.tmp
+
+# Test artifacts
+*.test
+*.out
+coverage.*
+*.coverprofile
+
+# Editor/IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation (not needed in image)
+*.md
+LICENSE
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Scripts (not needed in image)
+scripts/
+
+# Misc
+.env
+.DS_Store
