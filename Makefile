@@ -69,7 +69,7 @@ bench-all: bench
 	@echo ""
 	@echo "Running network benchmarks..."
 	@chmod +x scripts/bench.sh 2>/dev/null || true
-	@bash scripts/bench.sh || echo "Network benchmarks skipped (check if server is running)"
+	@bash scripts/bench.sh
 
 ## clean: Clean build artifacts
 clean:
