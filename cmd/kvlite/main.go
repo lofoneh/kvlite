@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/lofoneh/kvlite/internal/config"
-	"github.com/lofoneh/kvlite/internal/store"
+	"github.com/lofoneh/kvlite/internal/engine"
 	"github.com/lofoneh/kvlite/pkg/api"
 )
 
@@ -18,11 +18,13 @@ var (
 	host           = flag.String("host", "", "Host to bind to (default: localhost)")
 	port           = flag.Int("port", 0, "Port to listen on (default: 6380)")
 	maxConnections = flag.Int("max-connections", 0, "Maximum concurrent connections (0 = unlimited)")
+	walPath        = flag.String("wal-path", "./data", "Path for WAL files")
+	syncMode       = flag.Bool("sync-mode", false, "Sync to disk after every write (slower but safer)")
 	version        = flag.Bool("version", false, "Print version and exit")
 )
 
 const (
-	appVersion = "0.1.0"
+	appVersion = "0.2.0"
 	appName    = "kvlite"
 )
 
@@ -56,11 +58,21 @@ func main() {
 	// Print startup banner
 	printBanner(cfg)
 
-	// Initialize store
-	st := store.New()
+	// Initialize engine with persistence
+	log.Printf("Initializing engine (WAL path: %s, sync mode: %v)...", *walPath, *syncMode)
+	eng, err := engine.New(engine.Options{
+		WALPath:  *walPath,
+		SyncMode: *syncMode,
+	})
+	if err != nil {
+		log.Fatalf("Failed to create engine: %v", err)
+	}
+	defer eng.Close()
+
+	log.Printf("Engine initialized with %d keys", eng.Len())
 
 	// Create and start server
-	server := api.NewServer(cfg, st)
+	server := api.NewServer(cfg, eng)
 
 	// Handle graceful shutdown
 	sigChan := make(chan os.Signal, 1)
