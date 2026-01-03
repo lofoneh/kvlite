@@ -1,0 +1,23 @@
+# docker-compose.yml for kvlite service
+services:
+  kvlite:
+    build: .
+    container_name: kvlite
+    ports:
+      - "6380:6380"
+    environment:
+      - KVLITE_HOST=0.0.0.0
+      - KVLITE_PORT=6380
+      - KVLITE_MAX_CONNECTIONS=1000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "6380"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - kvlite-network
+
+networks:
+  kvlite-network:
+    driver: bridge
