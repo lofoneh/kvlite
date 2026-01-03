@@ -11,12 +11,12 @@ import (
 	"sync/atomic"
 
 	"github.com/lofoneh/kvlite/internal/config"
-	"github.com/lofoneh/kvlite/internal/store"
+	"github.com/lofoneh/kvlite/internal/engine"
 )
 
 // Server handles TCP connections and command processing
 type Server struct {
-	store          *store.Store
+	engine       *engine.Engine
 	listener       net.Listener
 	cfg            *config.Config
 	activeConns    int32
@@ -25,9 +25,9 @@ type Server struct {
 }
 
 // NewServer creates a new Server instance
-func NewServer(cfg *config.Config, store *store.Store) *Server {
+func NewServer(cfg *config.Config, eng *engine.Engine) *Server {
 	return &Server{
-		store:        store,
+		engine:        eng,
 		cfg:          cfg,
 		shutdownChan: make(chan struct{}),
 	}
@@ -159,7 +159,9 @@ func (s *Server) processCommand(line string) string {
 		}
 		key := parts[1]
 		value := strings.Join(parts[2:], " ")
-		s.store.Set(key, value)
+		if err := s.engine.Set(key, value); err != nil {
+			return fmt.Sprintf("-ERR failed to set: %v", err)
+		}
 		return "+OK"
 
 	case "GET":
@@ -167,7 +169,7 @@ func (s *Server) processCommand(line string) string {
 			return "-ERR GET requires key"
 		}
 		key := parts[1]
-		val, ok := s.store.Get(key)
+		val, ok := s.engine.Get(key)
 		if !ok {
 			return "-ERR key not found"
 		}
@@ -178,8 +180,11 @@ func (s *Server) processCommand(line string) string {
 			return "-ERR DELETE requires key"
 		}
 		key := parts[1]
-		existed := s.store.Delete(key)
-		if existed {
+		deleted, err := s.engine.Delete(key)
+		if err != nil {
+			return fmt.Sprintf("-ERR failed to delete: %v", err)
+		}
+		if deleted {
 			return "+OK"
 		}
 		return "-ERR key not found"
@@ -189,14 +194,16 @@ func (s *Server) processCommand(line string) string {
 			return "-ERR EXISTS requires key"
 		}
 		key := parts[1]
-		_, ok := s.store.Get(key)
+		_, ok := s.engine.Get(key)
 		if ok {
 			return "1"
 		}
 		return "0"
 
 	case "CLEAR":
-		s.store.Clear()
+		if err := s.engine.Clear(); err != nil {
+			return fmt.Sprintf("-ERR failed to clear: %v", err)
+		}
 		return "+OK"
 
 	case "PING":
@@ -206,9 +213,17 @@ func (s *Server) processCommand(line string) string {
 		return "+OK goodbye"
 
 	case "INFO":
-		return fmt.Sprintf("+OK keys=%d connections=%d", 
-			s.store.Len(), 
-			atomic.LoadInt32(&s.activeConns))
+		walSize, _ := s.engine.WALSize()
+		return fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d", 
+			s.engine.Len(), 
+			atomic.LoadInt32(&s.activeConns),
+			walSize)
+	
+	case "SYNC":
+		if err := s.engine.Sync(); err != nil {
+			return fmt.Sprintf("-ERR failed to sync: %v", err)
+		}
+		return "+OK"
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'", cmd)
