@@ -224,6 +224,25 @@ func (s *Server) processCommand(line string) string {
 			return fmt.Sprintf("-ERR failed to sync: %v", err)
 		}
 		return "+OK"
+	
+	case "COMPACT":
+		if err := s.engine.ForceCompact(); err != nil {
+			return fmt.Sprintf("-ERR failed to compact: %v", err)
+		}
+		return "+OK"
+	
+	case "STATS":
+		stats := s.engine.CompactionStats()
+		walSize := stats["wal_size"].(int64)
+		walEntries := stats["wal_entries"].(int64)
+		needsCompaction := stats["needs_compaction"].(bool)
+		
+		return fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d wal_entries=%d needs_compaction=%v", 
+			s.engine.Len(), 
+			atomic.LoadInt32(&s.activeConns),
+			walSize,
+			walEntries,
+			needsCompaction)
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'", cmd)

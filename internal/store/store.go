@@ -1,3 +1,4 @@
+// internal/store/store.go
 package store
 
 import (
@@ -55,4 +56,17 @@ func (s *Store) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.data = make(map[string]string)
+}
+
+// Range iterates over all key-value pairs
+// The function f should return true to continue iteration, false to stop
+func (s *Store) Range(f func(key, value string) bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	for key, value := range s.data {
+		if !f(key, value) {
+			break
+		}
+	}
 }
