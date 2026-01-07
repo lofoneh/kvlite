@@ -24,11 +24,12 @@ var (
 	maxWALEntries    = flag.Int64("max-wal-entries", 10000, "Trigger compaction after this many entries")
 	maxWALSize       = flag.Int64("max-wal-size", 10*1024*1024, "Trigger compaction after this size (bytes)")
 	compactInterval  = flag.Duration("compact-interval", 1*time.Minute, "How often to check for compaction")
+	ttlCheckInterval = flag.Duration("ttl-check-interval", 1*time.Second, "How often to check for expired keys")
 	version          = flag.Bool("version", false, "Print version and exit")
 )
 
 const (
-	appVersion = "0.3.0"
+	appVersion = "0.4.0"
 	appName    = "kvlite"
 )
 
@@ -70,6 +71,7 @@ func main() {
 		MaxWALEntries:      *maxWALEntries,
 		MaxWALSize:         *maxWALSize,
 		CompactionInterval: *compactInterval,
+		TTLCheckInterval:   *ttlCheckInterval,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create engine: %v", err)
