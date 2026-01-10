@@ -351,7 +351,7 @@ func (s *Server) processCommand(line string) string {
 		ttlExpired := stats["ttl_total_expired"].(int64)
 		ttlChecks := stats["ttl_checks"].(int64)
 
-		return fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d wal_entries=%d needs_compaction=%v ttl_expired=%d ttl_checks=%d",
+		result := fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d wal_entries=%d needs_compaction=%v ttl_expired=%d ttl_checks=%d",
 			s.engine.Len(),
 			atomic.LoadInt32(&s.activeConns),
 			walSize,
@@ -359,6 +359,83 @@ func (s *Server) processCommand(line string) string {
 			needsCompaction,
 			ttlExpired,
 			ttlChecks)
+		
+		// Add analytics stats if enabled
+		if analyticsEnabled, ok := stats["analytics_enabled"].(bool); ok && analyticsEnabled {
+			totalReads := stats["total_reads"].(int64)
+			totalWrites := stats["total_writes"].(int64)
+			result += fmt.Sprintf(" reads=%d writes=%d", totalReads, totalWrites)
+		}
+		
+		return result
+	
+	case "ANALYZE":
+		if len(parts) < 2 {
+			return "-ERR ANALYZE requires key"
+		}
+		key := parts[1]
+		
+		keyStats := s.engine.GetKeyStats(key)
+		if keyStats == nil {
+			return "-ERR analytics not enabled or key not found"
+		}
+		
+		return fmt.Sprintf("+OK reads=%d writes=%d last_access=%s created=%s",
+			keyStats.Reads,
+			keyStats.Writes,
+			keyStats.LastAccess.Format(time.RFC3339),
+			keyStats.CreatedAt.Format(time.RFC3339))
+	
+	case "HOTKEYS":
+		count := 10
+		if len(parts) >= 2 {
+			var err error
+			count, err = strconv.Atoi(parts[1])
+			if err != nil || count <= 0 {
+				return "-ERR invalid count"
+			}
+		}
+		
+		hotKeys := s.engine.GetHotKeys(count)
+		if hotKeys == nil {
+			return "-ERR analytics not enabled"
+		}
+		
+		if len(hotKeys) == 0 {
+			return "(empty list)"
+		}
+		
+		result := ""
+		for _, stats := range hotKeys {
+			result += fmt.Sprintf("%s (reads=%d writes=%d)\n", stats.Key, stats.Reads, stats.Writes)
+		}
+		return strings.TrimSuffix(result, "\n")
+	
+	case "SUGGEST-TTL":
+		if len(parts) < 2 {
+			return "-ERR SUGGEST-TTL requires key"
+		}
+		key := parts[1]
+		
+		suggestedTTL := s.engine.SuggestTTL(key)
+		if suggestedTTL == 0 {
+			return "-ERR analytics not enabled or insufficient data"
+		}
+		
+		seconds := int64(suggestedTTL.Seconds())
+		return fmt.Sprintf("%d", seconds)
+	
+	case "ANOMALIES":
+		anomalies := s.engine.DetectAnomalies()
+		if anomalies == nil {
+			return "-ERR analytics not enabled"
+		}
+		
+		if len(anomalies) == 0 {
+			return "(no anomalies detected)"
+		}
+		
+		return strings.Join(anomalies, "\n")
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'", cmd)
