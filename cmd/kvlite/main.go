@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/lofoneh/kvlite/internal/config"
 	"github.com/lofoneh/kvlite/internal/engine"
@@ -15,16 +16,20 @@ import (
 )
 
 var (
-	host           = flag.String("host", "", "Host to bind to (default: localhost)")
-	port           = flag.Int("port", 0, "Port to listen on (default: 6380)")
-	maxConnections = flag.Int("max-connections", 0, "Maximum concurrent connections (0 = unlimited)")
-	walPath        = flag.String("wal-path", "./data", "Path for WAL files")
-	syncMode       = flag.Bool("sync-mode", false, "Sync to disk after every write (slower but safer)")
-	version        = flag.Bool("version", false, "Print version and exit")
+	host             = flag.String("host", "", "Host to bind to (default: localhost)")
+	port             = flag.Int("port", 0, "Port to listen on (default: 6380)")
+	maxConnections   = flag.Int("max-connections", 0, "Maximum concurrent connections (0 = unlimited)")
+	walPath          = flag.String("wal-path", "./data", "Path for WAL files")
+	syncMode         = flag.Bool("sync-mode", false, "Sync to disk after every write (slower but safer)")
+	maxWALEntries    = flag.Int64("max-wal-entries", 10000, "Trigger compaction after this many entries")
+	maxWALSize       = flag.Int64("max-wal-size", 10*1024*1024, "Trigger compaction after this size (bytes)")
+	compactInterval  = flag.Duration("compact-interval", 1*time.Minute, "How often to check for compaction")
+	ttlCheckInterval = flag.Duration("ttl-check-interval", 1*time.Second, "How often to check for expired keys")
+	version          = flag.Bool("version", false, "Print version and exit")
 )
 
 const (
-	appVersion = "0.2.0"
+	appVersion = "0.4.0"
 	appName    = "kvlite"
 )
 
@@ -61,8 +66,12 @@ func main() {
 	// Initialize engine with persistence
 	log.Printf("Initializing engine (WAL path: %s, sync mode: %v)...", *walPath, *syncMode)
 	eng, err := engine.New(engine.Options{
-		WALPath:  *walPath,
-		SyncMode: *syncMode,
+		WALPath:            *walPath,
+		SyncMode:           *syncMode,
+		MaxWALEntries:      *maxWALEntries,
+		MaxWALSize:         *maxWALSize,
+		CompactionInterval: *compactInterval,
+		TTLCheckInterval:   *ttlCheckInterval,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create engine: %v", err)
@@ -103,7 +112,7 @@ func main() {
 func printBanner(cfg *config.Config) {
 	banner := `
 ╔═══════════════════════════════════════╗
-║           kvlite v%s                  ║
+║           kvlite v%s                ║
 ║   Fast In-Memory Key-Value Store      ║
 ╚═══════════════════════════════════════╝
 `

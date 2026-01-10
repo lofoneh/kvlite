@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/lofoneh/kvlite/internal/config"
 	"github.com/lofoneh/kvlite/internal/engine"
@@ -16,7 +18,7 @@ import (
 
 // Server handles TCP connections and command processing
 type Server struct {
-	engine       *engine.Engine
+	engine         *engine.Engine
 	listener       net.Listener
 	cfg            *config.Config
 	activeConns    int32
@@ -27,7 +29,7 @@ type Server struct {
 // NewServer creates a new Server instance
 func NewServer(cfg *config.Config, eng *engine.Engine) *Server {
 	return &Server{
-		engine:        eng,
+		engine:       eng,
 		cfg:          cfg,
 		shutdownChan: make(chan struct{}),
 	}
@@ -112,7 +114,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		
+
 		// Empty line, skip
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -135,15 +137,6 @@ func (s *Server) handleConnection(conn net.Conn) {
 }
 
 // processCommand parses and executes commands
-// Protocol:
-//   SET key value -> +OK
-//   GET key       -> value or -ERR key not found
-//   DELETE key    -> +OK or -ERR key not found
-//   EXISTS key    -> 1 or 0
-//   KEYS          -> list of keys
-//   CLEAR         -> +OK
-//   PING          -> +PONG
-//   QUIT          -> +OK goodbye
 func (s *Server) processCommand(line string) string {
 	parts := strings.Fields(line)
 	if len(parts) == 0 {
@@ -160,6 +153,23 @@ func (s *Server) processCommand(line string) string {
 		key := parts[1]
 		value := strings.Join(parts[2:], " ")
 		if err := s.engine.Set(key, value); err != nil {
+			return fmt.Sprintf("-ERR failed to set: %v", err)
+		}
+		return "+OK"
+
+	case "SETEX":
+		if len(parts) < 4 {
+			return "-ERR SETEX requires key, seconds, and value"
+		}
+		key := parts[1]
+		seconds, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || seconds <= 0 {
+			return "-ERR invalid TTL"
+		}
+		value := strings.Join(parts[3:], " ")
+
+		ttl := time.Duration(seconds) * time.Second
+		if err := s.engine.SetWithTTL(key, value, ttl); err != nil {
 			return fmt.Sprintf("-ERR failed to set: %v", err)
 		}
 		return "+OK"
@@ -200,6 +210,108 @@ func (s *Server) processCommand(line string) string {
 		}
 		return "0"
 
+	case "EXPIRE":
+		if len(parts) < 3 {
+			return "-ERR EXPIRE requires key and seconds"
+		}
+		key := parts[1]
+		seconds, err := strconv.ParseInt(parts[2], 10, 64)
+		if err != nil || seconds <= 0 {
+			return "-ERR invalid TTL"
+		}
+
+		ttl := time.Duration(seconds) * time.Second
+		if s.engine.Expire(key, ttl) {
+			return "1"
+		}
+		return "0"
+
+	case "TTL":
+		if len(parts) < 2 {
+			return "-ERR TTL requires key"
+		}
+		key := parts[1]
+
+		// Check if key exists first
+		_, exists := s.engine.Get(key)
+		if !exists {
+			return "-2" // Key doesn't exist
+		}
+
+		ttl := s.engine.TTL(key)
+		if ttl == 0 {
+			return "-1" // No TTL
+		}
+
+		seconds := int64(ttl.Seconds())
+		return fmt.Sprintf("%d", seconds)
+
+	case "PERSIST":
+		if len(parts) < 2 {
+			return "-ERR PERSIST requires key"
+		}
+		key := parts[1]
+		if s.engine.Persist(key) {
+			return "1"
+		}
+		return "0"
+
+	case "KEYS":
+		pattern := "*"
+		if len(parts) >= 2 {
+			pattern = parts[1]
+		}
+
+		keys := s.engine.Keys(pattern)
+		if len(keys) == 0 {
+			return "(empty list)"
+		}
+
+		return strings.Join(keys, "\n")
+
+	case "SCAN":
+		cursor := 0
+		pattern := "*"
+		count := 10
+
+		if len(parts) < 2 {
+			return "-ERR SCAN requires cursor"
+		}
+
+		var err error
+		cursor, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return "-ERR invalid cursor"
+		}
+
+		// Parse optional arguments
+		for i := 2; i < len(parts); i++ {
+			arg := strings.ToUpper(parts[i])
+			switch arg {
+			case "MATCH":
+				if i+1 < len(parts) {
+					pattern = parts[i+1]
+					i++
+				}
+			case "COUNT":
+				if i+1 < len(parts) {
+					count, err = strconv.Atoi(parts[i+1])
+					if err != nil || count <= 0 {
+						return "-ERR invalid count"
+					}
+					i++
+				}
+			}
+		}
+
+		nextCursor, keys, _ := s.engine.Scan(cursor, pattern, count)
+
+		result := fmt.Sprintf("%d", nextCursor)
+		if len(keys) > 0 {
+			result += "\n" + strings.Join(keys, "\n")
+		}
+		return result
+
 	case "CLEAR":
 		if err := s.engine.Clear(); err != nil {
 			return fmt.Sprintf("-ERR failed to clear: %v", err)
@@ -214,16 +326,39 @@ func (s *Server) processCommand(line string) string {
 
 	case "INFO":
 		walSize, _ := s.engine.WALSize()
-		return fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d", 
-			s.engine.Len(), 
+		return fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d",
+			s.engine.Len(),
 			atomic.LoadInt32(&s.activeConns),
 			walSize)
-	
+
 	case "SYNC":
 		if err := s.engine.Sync(); err != nil {
 			return fmt.Sprintf("-ERR failed to sync: %v", err)
 		}
 		return "+OK"
+
+	case "COMPACT":
+		if err := s.engine.ForceCompact(); err != nil {
+			return fmt.Sprintf("-ERR failed to compact: %v", err)
+		}
+		return "+OK"
+
+	case "STATS":
+		stats := s.engine.CompactionStats()
+		walSize := stats["wal_size"].(int64)
+		walEntries := stats["wal_entries"].(int64)
+		needsCompaction := stats["needs_compaction"].(bool)
+		ttlExpired := stats["ttl_total_expired"].(int64)
+		ttlChecks := stats["ttl_checks"].(int64)
+
+		return fmt.Sprintf("+OK keys=%d connections=%d wal_size=%d wal_entries=%d needs_compaction=%v ttl_expired=%d ttl_checks=%d",
+			s.engine.Len(),
+			atomic.LoadInt32(&s.activeConns),
+			walSize,
+			walEntries,
+			needsCompaction,
+			ttlExpired,
+			ttlChecks)
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'", cmd)
