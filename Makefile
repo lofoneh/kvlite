@@ -3,10 +3,10 @@
 .PHONY: all build test bench clean run install help client
 
 # Variables
-BINARY_NAME=kvlite
+BINARY_NAME=kvlite.exe
 BINARY_DIR=bin
 CLIENT_NAME=test_client
-VERSION=0.1.0
+VERSION=0.4.0
 
 # Go parameters
 GOCMD=go

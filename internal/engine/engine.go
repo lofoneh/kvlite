@@ -4,25 +4,57 @@ package engine
 import (
 	"fmt"
 	"log"
+	"sync"
+	"time"
 
+	"github.com/lofoneh/kvlite/internal/snapshot"
 	"github.com/lofoneh/kvlite/internal/store"
+	"github.com/lofoneh/kvlite/internal/ttl"
 	"github.com/lofoneh/kvlite/internal/wal"
 )
 
-// Engine coordinates the in-memory store and WAL for persistence
+// Engine coordinates the in-memory store, WAL, snapshots, and TTL for persistence
 type Engine struct {
-	store *store.Store
-	wal   *wal.WAL
+	store            *store.Store
+	wal              *wal.WAL
+	snapshotWriter   *snapshot.Writer
+	ttlManager       *ttl.Manager
+	mu               sync.RWMutex // Protects compaction operations
+	compactionTicker *time.Ticker
+	stopCompaction   chan struct{}
+
+	// Compaction thresholds
+	maxWALEntries int64
+	maxWALSize    int64
+	walEntryCount int64 // Track number of entries
 }
 
 // Options for creating an Engine
 type Options struct {
-	WALPath  string // Path for WAL files
-	SyncMode bool   // Sync to disk after every write
+	WALPath            string        // Path for WAL files
+	SyncMode           bool          // Sync to disk after every write
+	MaxWALEntries      int64         // Trigger compaction after this many entries (default: 10000)
+	MaxWALSize         int64         // Trigger compaction after this size in bytes (default: 10MB)
+	CompactionInterval time.Duration // How often to check for compaction (default: 1 minute)
+	TTLCheckInterval   time.Duration // How often to check for expired keys (default: 1 second)
 }
 
-// New creates a new Engine and recovers from WAL if it exists
+// New creates a new Engine and recovers from snapshot + WAL if they exist
 func New(opts Options) (*Engine, error) {
+	// Set defaults
+	if opts.MaxWALEntries == 0 {
+		opts.MaxWALEntries = 10000 // 10K entries
+	}
+	if opts.MaxWALSize == 0 {
+		opts.MaxWALSize = 10 * 1024 * 1024 // 10MB
+	}
+	if opts.CompactionInterval == 0 {
+		opts.CompactionInterval = 1 * time.Minute
+	}
+	if opts.TTLCheckInterval == 0 {
+		opts.TTLCheckInterval = 1 * time.Second
+	}
+
 	// Create store
 	st := store.New()
 
@@ -35,26 +67,69 @@ func New(opts Options) (*Engine, error) {
 		return nil, fmt.Errorf("failed to create WAL: %w", err)
 	}
 
-	engine := &Engine{
-		store: st,
-		wal:   w,
+	// Create snapshot writer
+	sw, err := snapshot.NewWriter(snapshot.Options{
+		Path: opts.WALPath,
+	})
+	if err != nil {
+		w.Close()
+		return nil, fmt.Errorf("failed to create snapshot writer: %w", err)
 	}
 
-	// Replay WAL to recover state
-	if err := engine.recover(); err != nil {
-		w.Close()
-		return nil, fmt.Errorf("failed to recover from WAL: %w", err)
+	// Create TTL manager
+	ttlMgr := ttl.NewManager(st, ttl.Options{
+		CheckInterval: opts.TTLCheckInterval,
+	})
+
+	engine := &Engine{
+		store:          st,
+		wal:            w,
+		snapshotWriter: sw,
+		ttlManager:     ttlMgr,
+		maxWALEntries:  opts.MaxWALEntries,
+		maxWALSize:     opts.MaxWALSize,
+		stopCompaction: make(chan struct{}),
 	}
+
+	// Recover from snapshot and WAL
+	if err := engine.recover(opts.WALPath); err != nil {
+		w.Close()
+		return nil, fmt.Errorf("failed to recover: %w", err)
+	}
+
+	// Start background processes
+	engine.compactionTicker = time.NewTicker(opts.CompactionInterval)
+	go engine.compactionLoop()
+
+	ttlMgr.Start()
 
 	return engine, nil
 }
 
-// recover replays the WAL to restore the store state
-func (e *Engine) recover() error {
-	log.Println("Starting WAL replay...")
+// recover loads snapshot (if exists) and replays WAL
+func (e *Engine) recover(path string) error {
+	log.Println("Starting recovery...")
 
-	count := 0
-	err := e.wal.Replay(func(record *wal.Record) error {
+	// Step 1: Load snapshot if it exists
+	snap, err := snapshot.Load(path)
+	if err != nil {
+		return fmt.Errorf("failed to load snapshot: %w", err)
+	}
+
+	if snap != nil {
+		log.Printf("Loading snapshot with %d keys...", snap.KeyCount)
+		for key, value := range snap.Data {
+			e.store.Set(key, value)
+		}
+		log.Printf("Snapshot loaded: %d keys", snap.KeyCount)
+	} else {
+		log.Println("No snapshot found, starting fresh")
+	}
+
+	// Step 2: Replay WAL for operations after snapshot
+	log.Println("Replaying WAL...")
+	walCount := 0
+	err = e.wal.Replay(func(record *wal.Record) error {
 		switch record.Op {
 		case wal.OpSet:
 			e.store.Set(record.Key, record.Value)
@@ -65,15 +140,17 @@ func (e *Engine) recover() error {
 		default:
 			return fmt.Errorf("unknown operation: %s", record.Op)
 		}
-		count++
+		walCount++
+		e.walEntryCount++
 		return nil
 	})
 
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to replay WAL: %w", err)
 	}
 
-	log.Printf("WAL replay complete: %d operations recovered, %d keys in store", count, e.store.Len())
+	log.Printf("Recovery complete: %d keys in store, %d WAL entries replayed",
+		e.store.Len(), walCount)
 	return nil
 }
 
@@ -87,12 +164,62 @@ func (e *Engine) Set(key, value string) error {
 
 	// Then update in-memory store
 	e.store.Set(key, value)
+
+	// Increment WAL entry count
+	e.mu.Lock()
+	e.walEntryCount++
+	e.mu.Unlock()
+
 	return nil
 }
 
 // Get retrieves a value by key
 func (e *Engine) Get(key string) (string, bool) {
-	return e.store.Get(key)
+	return e.store.Get(key) // Store handles lazy expiration
+}
+
+// SetWithTTL stores a key-value pair with TTL and writes to WAL
+func (e *Engine) SetWithTTL(key, value string, ttl time.Duration) error {
+	// Write to WAL first (durability)
+	record := wal.NewRecord(wal.OpSet, key, value)
+	if err := e.wal.Write(record); err != nil {
+		return fmt.Errorf("failed to write to WAL: %w", err)
+	}
+
+	// Then update in-memory store with TTL
+	e.store.SetWithTTL(key, value, ttl)
+
+	// Increment WAL entry count
+	e.mu.Lock()
+	e.walEntryCount++
+	e.mu.Unlock()
+
+	return nil
+}
+
+// Expire sets TTL on an existing key
+func (e *Engine) Expire(key string, ttl time.Duration) bool {
+	return e.store.Expire(key, ttl)
+}
+
+// Persist removes TTL from a key
+func (e *Engine) Persist(key string) bool {
+	return e.store.Persist(key)
+}
+
+// TTL returns the remaining time to live for a key
+func (e *Engine) TTL(key string) time.Duration {
+	return e.store.TTL(key)
+}
+
+// Keys returns all keys matching the pattern
+func (e *Engine) Keys(pattern string) []string {
+	return e.store.Keys(pattern)
+}
+
+// Scan returns keys with pagination
+func (e *Engine) Scan(cursor int, pattern string, count int) (int, []string, bool) {
+	return e.store.Scan(cursor, pattern, count)
 }
 
 // Delete removes a key-value pair and writes to WAL
@@ -111,6 +238,12 @@ func (e *Engine) Delete(key string) (bool, error) {
 
 	// Then delete from in-memory store
 	e.store.Delete(key)
+
+	// Increment WAL entry count
+	e.mu.Lock()
+	e.walEntryCount++
+	e.mu.Unlock()
+
 	return true, nil
 }
 
@@ -124,6 +257,12 @@ func (e *Engine) Clear() error {
 
 	// Then clear in-memory store
 	e.store.Clear()
+
+	// Increment WAL entry count
+	e.mu.Lock()
+	e.walEntryCount++
+	e.mu.Unlock()
+
 	return nil
 }
 
@@ -137,9 +276,21 @@ func (e *Engine) Sync() error {
 	return e.wal.Sync()
 }
 
-// Close closes the engine and WAL
+// Close closes the engine, WAL, and TTL manager
 func (e *Engine) Close() error {
 	log.Println("Closing engine...")
+
+	// Stop TTL manager
+	if e.ttlManager != nil {
+		e.ttlManager.Stop()
+	}
+
+	// Stop compaction loop
+	close(e.stopCompaction)
+	if e.compactionTicker != nil {
+		e.compactionTicker.Stop()
+	}
+
 	if err := e.wal.Close(); err != nil {
 		return fmt.Errorf("failed to close WAL: %w", err)
 	}
@@ -155,4 +306,103 @@ func (e *Engine) WALSize() (int64, error) {
 // WALPath returns the path to the WAL file
 func (e *Engine) WALPath() string {
 	return e.wal.Path()
+}
+
+// compactionLoop runs in the background and triggers compaction when needed
+func (e *Engine) compactionLoop() {
+	for {
+		select {
+		case <-e.compactionTicker.C:
+			if e.needsCompaction() {
+				log.Println("Compaction triggered by background checker")
+				if err := e.Compact(); err != nil {
+					log.Printf("Compaction failed: %v", err)
+				}
+			}
+		case <-e.stopCompaction:
+			return
+		}
+	}
+}
+
+// needsCompaction checks if compaction should be triggered
+func (e *Engine) needsCompaction() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	// Check entry count threshold
+	if e.walEntryCount >= e.maxWALEntries {
+		return true
+	}
+
+	// Check size threshold
+	size, err := e.wal.Size()
+	if err == nil && size >= e.maxWALSize {
+		return true
+	}
+
+	return false
+}
+
+// Compact creates a snapshot and truncates the WAL
+func (e *Engine) Compact() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	log.Println("Starting compaction...")
+	start := time.Now()
+
+	// Get current store state (this is a snapshot of keys, not a deep copy)
+	// We need to create a copy to avoid race conditions
+	data := make(map[string]string)
+
+	// This is safe because store operations are already protected by RWMutex
+	// We just need to copy the map to ensure the snapshot is consistent
+	e.store.Range(func(key, value string) bool {
+		data[key] = value
+		return true
+	})
+
+	// Create snapshot (atomic write)
+	if err := e.snapshotWriter.Create(data); err != nil {
+		return fmt.Errorf("failed to create snapshot: %w", err)
+	}
+
+	// Truncate WAL (all data is now in snapshot)
+	if err := e.wal.Truncate(); err != nil {
+		return fmt.Errorf("failed to truncate WAL: %w", err)
+	}
+
+	// Reset entry count
+	e.walEntryCount = 0
+
+	elapsed := time.Since(start)
+	log.Printf("Compaction complete: %d keys compacted in %v", len(data), elapsed)
+
+	return nil
+}
+
+// ForceCompact manually triggers compaction
+func (e *Engine) ForceCompact() error {
+	return e.Compact()
+}
+
+// CompactionStats returns statistics about compaction state
+func (e *Engine) CompactionStats() map[string]interface{} {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	walSize, _ := e.wal.Size()
+	ttlStats := e.ttlManager.Stats()
+
+	return map[string]interface{}{
+		"wal_entries":       e.walEntryCount,
+		"wal_size":          walSize,
+		"max_wal_entries":   e.maxWALEntries,
+		"max_wal_size":      e.maxWALSize,
+		"needs_compaction":  e.walEntryCount >= e.maxWALEntries || walSize >= e.maxWALSize,
+		"ttl_total_expired": ttlStats.TotalExpired,
+		"ttl_last_check":    ttlStats.LastCheckTime,
+		"ttl_checks":        ttlStats.ChecksPerformed,
+	}
 }

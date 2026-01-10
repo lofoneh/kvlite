@@ -13,7 +13,7 @@ import (
 )
 
 func main() {
-	addr := "localhost:6380"
+	addr := "localhost:6390"
 	if len(os.Args) > 1 {
 		addr = os.Args[1]
 	}
