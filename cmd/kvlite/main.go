@@ -25,11 +25,12 @@ var (
 	maxWALSize       = flag.Int64("max-wal-size", 10*1024*1024, "Trigger compaction after this size (bytes)")
 	compactInterval  = flag.Duration("compact-interval", 1*time.Minute, "How often to check for compaction")
 	ttlCheckInterval = flag.Duration("ttl-check-interval", 1*time.Second, "How often to check for expired keys")
+	enableAnalytics  = flag.Bool("enable-analytics", true, "Enable AI-powered analytics and smart scheduling")
 	version          = flag.Bool("version", false, "Print version and exit")
 )
 
 const (
-	appVersion = "0.4.0"
+	appVersion = "0.5.0"
 	appName    = "kvlite"
 )
 
@@ -64,7 +65,7 @@ func main() {
 	printBanner(cfg)
 
 	// Initialize engine with persistence
-	log.Printf("Initializing engine (WAL path: %s, sync mode: %v)...", *walPath, *syncMode)
+	log.Printf("Initializing engine (WAL path: %s, sync mode: %v, analytics: %v)...", *walPath, *syncMode, *enableAnalytics)
 	eng, err := engine.New(engine.Options{
 		WALPath:            *walPath,
 		SyncMode:           *syncMode,
@@ -72,6 +73,7 @@ func main() {
 		MaxWALSize:         *maxWALSize,
 		CompactionInterval: *compactInterval,
 		TTLCheckInterval:   *ttlCheckInterval,
+		EnableAnalytics:    *enableAnalytics,
 	})
 	if err != nil {
 		log.Fatalf("Failed to create engine: %v", err)
@@ -112,7 +114,7 @@ func main() {
 func printBanner(cfg *config.Config) {
 	banner := `
 ╔═══════════════════════════════════════╗
-║           kvlite v%s                ║
+║           kvlite v%s               ║
 ║   Fast In-Memory Key-Value Store      ║
 ╚═══════════════════════════════════════╝
 `
