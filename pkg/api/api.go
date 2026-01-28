@@ -436,6 +436,187 @@ func (s *Server) processCommand(line string) string {
 		}
 		
 		return strings.Join(anomalies, "\n")
+		
+	case "MSET":
+		if len(parts) < 3 || len(parts)%2 != 1 {
+			return "-ERR MSET requires key value pairs"
+		}
+		
+		// Batch set operation
+		for i := 1; i < len(parts); i += 2 {
+			key := parts[i]
+			value := parts[i+1]
+			if err := s.engine.Set(key, value); err != nil {
+				return fmt.Sprintf("-ERR failed at key %s: %v", key, err)
+			}
+		}
+		return "+OK"
+
+	case "MGET":
+		if len(parts) < 2 {
+			return "-ERR MGET requires at least one key"
+		}
+		
+		// Batch get operation
+		var results []string
+		for _, key := range parts[1:] {
+			val, ok := s.engine.Get(key)
+			if ok {
+				results = append(results, val)
+			} else {
+				results = append(results, "(nil)")
+			}
+		}
+		return strings.Join(results, "\n")
+
+	case "MDEL":
+		if len(parts) < 2 {
+			return "-ERR MDEL requires at least one key"
+		}
+		
+		// Batch delete operation
+		deleted := 0
+		for _, key := range parts[1:] {
+			if ok, err := s.engine.Delete(key); err == nil && ok {
+				deleted++
+			}
+		}
+		return fmt.Sprintf("%d", deleted)
+
+	case "HEALTH":
+		// Health check endpoint
+		walSize, walErr := s.engine.WALSize()
+		status := "healthy"
+		
+		if walErr != nil {
+			status = "degraded"
+		}
+		
+		health := fmt.Sprintf(`{
+	"status": "%s",
+	"keys": %d,
+	"connections": %d,
+	"wal_size": %d,
+	"wal_healthy": %v
+	}`, status, s.engine.Len(), atomic.LoadInt32(&s.activeConns), walSize, walErr == nil)
+		
+		return health
+
+	case "CONFIG":
+		if len(parts) < 2 {
+			return "-ERR CONFIG requires subcommand"
+		}
+		
+		subCmd := strings.ToUpper(parts[1])
+		switch subCmd {
+		case "GET":
+			if len(parts) < 3 {
+				return "-ERR CONFIG GET requires parameter name"
+			}
+			param := strings.ToLower(parts[2])
+			switch param {
+			case "max_connections":
+				return fmt.Sprintf("%d", s.cfg.MaxConnections)
+			case "host":
+				return s.cfg.Host
+			case "port":
+				return fmt.Sprintf("%d", s.cfg.Port)
+			default:
+				return "-ERR unknown config parameter"
+			}
+		default:
+			return "-ERR unknown CONFIG subcommand"
+		}
+
+	case "INCR":
+		if len(parts) < 2 {
+			return "-ERR INCR requires key"
+		}
+		key := parts[1]
+		
+		// Get current value
+		val, exists := s.engine.Get(key)
+		current := int64(0)
+		
+		if exists {
+			var err error
+			current, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return "-ERR value is not an integer"
+			}
+		}
+		
+		// Increment
+		current++
+		newVal := strconv.FormatInt(current, 10)
+		
+		if err := s.engine.Set(key, newVal); err != nil {
+			return fmt.Sprintf("-ERR failed to set: %v", err)
+		}
+		
+		return fmt.Sprintf("%d", current)
+
+	case "DECR":
+		if len(parts) < 2 {
+			return "-ERR DECR requires key"
+		}
+		key := parts[1]
+		
+		// Get current value
+		val, exists := s.engine.Get(key)
+		current := int64(0)
+		
+		if exists {
+			var err error
+			current, err = strconv.ParseInt(val, 10, 64)
+			if err != nil {
+				return "-ERR value is not an integer"
+			}
+		}
+		
+		// Decrement
+		current--
+		newVal := strconv.FormatInt(current, 10)
+		
+		if err := s.engine.Set(key, newVal); err != nil {
+			return fmt.Sprintf("-ERR failed to set: %v", err)
+		}
+		
+		return fmt.Sprintf("%d", current)
+
+	case "APPEND":
+		if len(parts) < 3 {
+			return "-ERR APPEND requires key and value"
+		}
+		key := parts[1]
+		appendVal := strings.Join(parts[2:], " ")
+		
+		// Get current value
+		val, exists := s.engine.Get(key)
+		if !exists {
+			val = ""
+		}
+		
+		// Append
+		newVal := val + appendVal
+		if err := s.engine.Set(key, newVal); err != nil {
+			return fmt.Sprintf("-ERR failed to set: %v", err)
+		}
+		
+		return fmt.Sprintf("%d", len(newVal))
+
+	case "STRLEN":
+		if len(parts) < 2 {
+			return "-ERR STRLEN requires key"
+		}
+		key := parts[1]
+		
+		val, exists := s.engine.Get(key)
+		if !exists {
+			return "0"
+		}
+		
+		return fmt.Sprintf("%d", len(val))
 
 	default:
 		return fmt.Sprintf("-ERR unknown command '%s'", cmd)
