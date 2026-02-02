@@ -94,6 +94,15 @@ func (s *Server) Shutdown() error {
 	return nil
 }
 
+// Addr returns the actual address the server is listening on.
+// This is useful when using port 0 for OS-assigned random port.
+func (s *Server) Addr() string {
+	if s.listener != nil {
+		return s.listener.Addr().String()
+	}
+	return s.cfg.Address()
+}
+
 // handleConnection processes commands from a single client
 func (s *Server) handleConnection(conn net.Conn) {
 	defer func() {

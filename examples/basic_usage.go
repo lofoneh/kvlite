@@ -13,7 +13,7 @@ import (
 
 func main() {
 	fmt.Println("kvlite Client Examples")
-	fmt.Println("======================\n")
+	fmt.Println("======================")
 
 	// Connect to kvlite server
 	c, err := client.NewClient("localhost:6380")

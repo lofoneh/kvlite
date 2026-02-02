@@ -58,8 +58,9 @@ func (c *Config) Address() string {
 
 // Validate checks if the configuration is valid
 func (c *Config) Validate() error {
-	if c.Port < 1 || c.Port > 65535 {
-		return fmt.Errorf("invalid port: %d (must be 1-65535)", c.Port)
+	// Port 0 is allowed for OS-assigned random port
+	if c.Port < 0 || c.Port > 65535 {
+		return fmt.Errorf("invalid port: %d (must be 0-65535)", c.Port)
 	}
 	if c.MaxConnections < 0 {
 		return fmt.Errorf("invalid max connections: %d (must be >= 0)", c.MaxConnections)

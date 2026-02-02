@@ -22,10 +22,10 @@ type TestServer struct {
 
 func setupTestServer(t *testing.T) *TestServer {
 	tmpDir := t.TempDir()
-	
+
 	cfg := &config.Config{
 		Host:           "localhost",
-		Port:           0, // Random port
+		Port:           0, // Random port - OS will assign available port
 		MaxConnections: 0,
 	}
 
@@ -39,21 +39,28 @@ func setupTestServer(t *testing.T) *TestServer {
 	}
 
 	server := api.NewServer(cfg, eng)
-	
+
 	// Start server in goroutine
+	errChan := make(chan error, 1)
 	go func() {
 		if err := server.Start(); err != nil {
-			t.Logf("Server error: %v", err)
+			errChan <- err
 		}
 	}()
 
-	// Wait for server to start
+	// Wait for server to start and check for errors
 	time.Sleep(100 * time.Millisecond)
+
+	select {
+	case err := <-errChan:
+		t.Fatalf("Server failed to start: %v", err)
+	default:
+	}
 
 	return &TestServer{
 		server: server,
 		engine: eng,
-		addr:   cfg.Address(),
+		addr:   server.Addr(), // Use actual address from listener
 	}
 }
 
@@ -195,23 +202,31 @@ func TestIntegration_ConcurrentClients(t *testing.T) {
 func TestIntegration_Persistence(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create first server
-	cfg := &config.Config{
+	// Create first server with random port
+	cfg1 := &config.Config{
 		Host: "localhost",
-		Port: 6381,
+		Port: 0, // Random port
 	}
 
-	eng1, _ := engine.New(engine.Options{
+	eng1, err := engine.New(engine.Options{
 		WALPath:  tmpDir,
 		SyncMode: false,
 	})
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
 
-	server1 := api.NewServer(cfg, eng1)
+	server1 := api.NewServer(cfg1, eng1)
 	go server1.Start()
 	time.Sleep(100 * time.Millisecond)
 
+	addr1 := server1.Addr()
+
 	// Write data
-	conn, _ := net.Dial("tcp", "localhost:6381")
+	conn, err := net.Dial("tcp", addr1)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
 	writer := bufio.NewWriter(conn)
 	reader := bufio.NewReader(conn)
 	reader.ReadString('\n') // Welcome
@@ -220,25 +235,40 @@ func TestIntegration_Persistence(t *testing.T) {
 	writer.Flush()
 	reader.ReadString('\n')
 
+	// IMPORTANT: Close connection BEFORE shutting down server
+	conn.Close()
+
 	// Close first server
 	server1.Shutdown()
 	eng1.Close()
-	conn.Close()
 
 	time.Sleep(100 * time.Millisecond)
 
 	// Create second server with same data directory
-	eng2, _ := engine.New(engine.Options{
+	cfg2 := &config.Config{
+		Host: "localhost",
+		Port: 0, // Random port
+	}
+
+	eng2, err := engine.New(engine.Options{
 		WALPath:  tmpDir,
 		SyncMode: false,
 	})
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
 
-	server2 := api.NewServer(cfg, eng2)
+	server2 := api.NewServer(cfg2, eng2)
 	go server2.Start()
 	time.Sleep(100 * time.Millisecond)
 
+	addr2 := server2.Addr()
+
 	// Verify data persisted
-	conn, _ = net.Dial("tcp", "localhost:6381")
+	conn, err = net.Dial("tcp", addr2)
+	if err != nil {
+		t.Fatalf("Failed to connect: %v", err)
+	}
 	writer = bufio.NewWriter(conn)
 	reader = bufio.NewReader(conn)
 	reader.ReadString('\n') // Welcome
@@ -247,13 +277,15 @@ func TestIntegration_Persistence(t *testing.T) {
 	writer.Flush()
 	response, _ := reader.ReadString('\n')
 
+	// Close connection BEFORE shutting down server
+	conn.Close()
+
 	if response[:len(response)-1] != "test_value" {
 		t.Errorf("Data not persisted: %s", response)
 	}
 
 	server2.Shutdown()
 	eng2.Close()
-	conn.Close()
 }
 
 func TestIntegration_Analytics(t *testing.T) {
@@ -283,11 +315,14 @@ func TestIntegration_Analytics(t *testing.T) {
 
 func BenchmarkIntegration_SET(b *testing.B) {
 	tmpDir := b.TempDir()
-	cfg := &config.Config{Host: "localhost", Port: 6382}
+	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := api.NewServer(cfg, eng)
 	go server.Start()
 	time.Sleep(100 * time.Millisecond)
+
+	addr := server.Addr()
+
 	defer func() {
 		server.Shutdown()
 		eng.Close()
@@ -295,7 +330,7 @@ func BenchmarkIntegration_SET(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		conn, _ := net.Dial("tcp", "localhost:6382")
+		conn, _ := net.Dial("tcp", addr)
 		writer := bufio.NewWriter(conn)
 		reader := bufio.NewReader(conn)
 		reader.ReadString('\n')
