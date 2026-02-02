@@ -14,7 +14,8 @@ type KeyStats struct {
 	Writes        int64
 	LastAccess    time.Time
 	CreatedAt     time.Time
-	AccessHistory []time.Time // Last N accesses
+	AccessHistory []time.Time // Last N accesses (circular buffer)
+	historyIndex  int         // Current position in circular buffer
 }
 
 // Tracker tracks access patterns for all keys
@@ -40,57 +41,50 @@ func NewTracker(maxHistorySize int) *Tracker {
 	}
 }
 
-// RecordRead records a read operation
-func (t *Tracker) RecordRead(key string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
+// recordAccess handles the common logic for recording access with circular buffer
+func (t *Tracker) recordAccess(key string, isWrite bool) {
 	stats, exists := t.stats[key]
 	if !exists {
 		stats = &KeyStats{
 			Key:           key,
 			CreatedAt:     time.Now(),
 			AccessHistory: make([]time.Time, 0, t.maxHistorySize),
+			historyIndex:  0,
 		}
 		t.stats[key] = stats
 	}
 
-	stats.Reads++
-	stats.LastAccess = time.Now()
-	stats.AccessHistory = append(stats.AccessHistory, time.Now())
-
-	// Keep history bounded
-	if len(stats.AccessHistory) > t.maxHistorySize {
-		stats.AccessHistory = stats.AccessHistory[1:]
+	if isWrite {
+		stats.Writes++
+		t.totalWrites++
+	} else {
+		stats.Reads++
+		t.totalReads++
 	}
 
-	t.totalReads++
+	stats.LastAccess = time.Now()
+
+	// Use circular buffer to avoid slice reallocation
+	if len(stats.AccessHistory) < t.maxHistorySize {
+		stats.AccessHistory = append(stats.AccessHistory, time.Now())
+	} else {
+		stats.AccessHistory[stats.historyIndex] = time.Now()
+		stats.historyIndex = (stats.historyIndex + 1) % t.maxHistorySize
+	}
+}
+
+// RecordRead records a read operation
+func (t *Tracker) RecordRead(key string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.recordAccess(key, false)
 }
 
 // RecordWrite records a write operation
 func (t *Tracker) RecordWrite(key string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-
-	stats, exists := t.stats[key]
-	if !exists {
-		stats = &KeyStats{
-			Key:           key,
-			CreatedAt:     time.Now(),
-			AccessHistory: make([]time.Time, 0, t.maxHistorySize),
-		}
-		t.stats[key] = stats
-	}
-
-	stats.Writes++
-	stats.LastAccess = time.Now()
-	stats.AccessHistory = append(stats.AccessHistory, time.Now())
-
-	if len(stats.AccessHistory) > t.maxHistorySize {
-		stats.AccessHistory = stats.AccessHistory[1:]
-	}
-
-	t.totalWrites++
+	t.recordAccess(key, true)
 }
 
 // GetStats returns stats for a specific key
@@ -143,6 +137,8 @@ func (t *Tracker) GetHotKeys(n int) []*KeyStats {
 	for i := 0; i < n; i++ {
 		stats := t.stats[accesses[i].key]
 		statsCopy := *stats
+		statsCopy.AccessHistory = make([]time.Time, len(stats.AccessHistory))
+		copy(statsCopy.AccessHistory, stats.AccessHistory)
 		result[i] = &statsCopy
 	}
 
@@ -160,6 +156,8 @@ func (t *Tracker) GetColdKeys(threshold time.Duration) []*KeyStats {
 	for _, stats := range t.stats {
 		if stats.LastAccess.Before(cutoff) {
 			statsCopy := *stats
+			statsCopy.AccessHistory = make([]time.Time, len(stats.AccessHistory))
+			copy(statsCopy.AccessHistory, stats.AccessHistory)
 			result = append(result, &statsCopy)
 		}
 	}
@@ -220,14 +218,14 @@ func (t *Tracker) DetectAnomalies() []string {
 
 	anomalies := make([]string, 0)
 
+	if len(t.stats) == 0 {
+		return anomalies
+	}
+
 	// Calculate average access rate
 	var totalAccess int64
 	for _, stats := range t.stats {
 		totalAccess += stats.Reads + stats.Writes
-	}
-
-	if len(t.stats) == 0 {
-		return anomalies
 	}
 
 	avgAccess := float64(totalAccess) / float64(len(t.stats))
@@ -248,16 +246,18 @@ func (t *Tracker) GetGlobalStats() map[string]interface{} {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
+	readWriteRatio := 0.0
+	if t.totalWrites > 0 {
+		readWriteRatio = float64(t.totalReads) / float64(t.totalWrites)
+	} else if t.totalReads > 0 {
+		readWriteRatio = float64(t.totalReads)
+	}
+
 	return map[string]interface{}{
-		"total_keys":   len(t.stats),
-		"total_reads":  t.totalReads,
-		"total_writes": t.totalWrites,
-		"read_write_ratio": func() float64 {
-			if t.totalWrites == 0 {
-				return float64(t.totalReads)
-			}
-			return float64(t.totalReads) / float64(t.totalWrites)
-		}(),
+		"total_keys":       len(t.stats),
+		"total_reads":      t.totalReads,
+		"total_writes":     t.totalWrites,
+		"read_write_ratio": readWriteRatio,
 	}
 }
 
