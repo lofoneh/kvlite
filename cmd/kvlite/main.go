@@ -114,7 +114,7 @@ func main() {
 func printBanner(cfg *config.Config) {
 	banner := `
 ╔═══════════════════════════════════════╗
-║           kvlite v%s               ║
+║           kvlite v%s                ║
 ║   Fast In-Memory Key-Value Store      ║
 ╚═══════════════════════════════════════╝
 `
