@@ -1,5 +1,10 @@
 # kvlite
 
+[![CI](https://github.com/lofoneh/kvlite/actions/workflows/ci.yml/badge.svg)](https://github.com/lofoneh/kvlite/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 A fast, lightweight in-memory key-value store written in Go with persistence, TTL support, and AI-powered analytics.
 
 ## Features
@@ -141,16 +146,16 @@ docker run -p 6380:6380 kvlite
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    TCP Server                        │
-│                   (pkg/api/)                         │
+│                    TCP Server                       │
+│                   (pkg/api/)                        │
 └─────────────────────┬───────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────┐
-│                     Engine                           │
-│                (internal/engine/)                    │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐ │
+│                     Engine                          │
+│                (internal/engine/)                   │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌──────── ┐ │
 │  │  Store  │  │   WAL   │  │Snapshot │  │Analytics│ │
-│  └─────────┘  └─────────┘  └─────────┘  └────────┘ │
+│  └─────────┘  └─────────┘  └─────────┘  └──────── ┘ │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -164,11 +169,15 @@ docker run -p 6380:6380 kvlite
 
 See the [examples/](examples/) directory for usage patterns:
 
+### Go Examples
 - **[caching/](examples/caching/)** - Cache-aside and write-through patterns
 - **[sessions/](examples/sessions/)** - Session management with TTL
 - **[rate_limiting/](examples/rate_limiting/)** - Token bucket, leaky bucket
 - **[locks/](examples/locks/)** - Distributed locking
 - **[counters/](examples/counters/)** - Atomic counters and analytics
+
+### TypeScript Examples
+- **[typescript-url-shortener/](examples/typescript-url-shortener/)** - URL shortener API with Express.js demonstrating SET, GET, INCR, TTL, and rate limiting
 
 ## Development
 
@@ -214,4 +223,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions welcome! Please read the contributing guidelines and submit pull requests.
+Contributions welcome! Please read our:
+
+- [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
+
+Whether it's bug reports, feature requests, documentation improvements, or code contributions - we appreciate your help!

@@ -36,3 +36,10 @@ go.work.sum
 # .vscode/
 .claude/
 CLAUDE.md
+
+node_modules/
+bun.lock
+package-lock.json
+
+# Root-level Node files (should only exist in examples/)
+/package.json
