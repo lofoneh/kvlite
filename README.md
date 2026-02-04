@@ -141,16 +141,16 @@ docker run -p 6380:6380 kvlite
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    TCP Server                        │
-│                   (pkg/api/)                         │
+│                    TCP Server                       │
+│                   (pkg/api/)                        │
 └─────────────────────┬───────────────────────────────┘
                       │
 ┌─────────────────────▼───────────────────────────────┐
-│                     Engine                           │
-│                (internal/engine/)                    │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌────────┐ │
+│                     Engine                          │
+│                (internal/engine/)                   │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌──────── ┐ │
 │  │  Store  │  │   WAL   │  │Snapshot │  │Analytics│ │
-│  └─────────┘  └─────────┘  └─────────┘  └────────┘ │
+│  └─────────┘  └─────────┘  └─────────┘  └──────── ┘ │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -164,11 +164,15 @@ docker run -p 6380:6380 kvlite
 
 See the [examples/](examples/) directory for usage patterns:
 
+### Go Examples
 - **[caching/](examples/caching/)** - Cache-aside and write-through patterns
 - **[sessions/](examples/sessions/)** - Session management with TTL
 - **[rate_limiting/](examples/rate_limiting/)** - Token bucket, leaky bucket
 - **[locks/](examples/locks/)** - Distributed locking
 - **[counters/](examples/counters/)** - Atomic counters and analytics
+
+### TypeScript Examples
+- **[typescript-url-shortener/](examples/typescript-url-shortener/)** - URL shortener API with Express.js demonstrating SET, GET, INCR, TTL, and rate limiting
 
 ## Development
 

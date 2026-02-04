@@ -68,6 +68,34 @@ func main() {
 }
 ```
 
+### Using Node.js/TypeScript
+
+kvlite uses a simple line-based TCP protocol, making it easy to connect from any language. Here's a minimal TypeScript client:
+
+```typescript
+import * as net from 'net';
+
+const socket = new net.Socket();
+
+socket.connect(6380, 'localhost', () => {
+  console.log('Connected to kvlite');
+});
+
+socket.on('data', (data) => {
+  console.log('Response:', data.toString().trim());
+});
+
+// Send commands
+socket.write('SET greeting "Hello from TypeScript!"\n');
+socket.write('GET greeting\n');
+```
+
+For a complete example with Express.js, see the [typescript-url-shortener](../examples/typescript-url-shortener/) example which demonstrates:
+- TCP client implementation with connection handling
+- SETEX for data with TTL
+- INCR for atomic counters
+- Rate limiting patterns
+
 ## Basic Operations
 
 Once connected, you'll see:
