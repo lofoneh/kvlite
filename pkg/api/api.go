@@ -20,6 +20,7 @@ import (
 type Server struct {
 	engine         *engine.Engine
 	listener       net.Listener
+	listenerMu     sync.RWMutex // Protects listener field
 	cfg            *config.Config
 	activeConns    int32
 	shutdownChan   chan struct{}
@@ -45,7 +46,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
+	s.listenerMu.Lock()
 	s.listener = ln
+	s.listenerMu.Unlock()
 	log.Printf("kvlite server listening on %s", s.cfg.Address())
 
 	for {
@@ -86,8 +89,11 @@ func (s *Server) Start() error {
 // Shutdown gracefully stops the server
 func (s *Server) Shutdown() error {
 	close(s.shutdownChan)
-	if s.listener != nil {
-		s.listener.Close()
+	s.listenerMu.RLock()
+	ln := s.listener
+	s.listenerMu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
 	s.wg.Wait()
 	log.Println("server shutdown complete")
@@ -97,8 +103,11 @@ func (s *Server) Shutdown() error {
 // Addr returns the actual address the server is listening on.
 // This is useful when using port 0 for OS-assigned random port.
 func (s *Server) Addr() string {
-	if s.listener != nil {
-		return s.listener.Addr().String()
+	s.listenerMu.RLock()
+	ln := s.listener
+	s.listenerMu.RUnlock()
+	if ln != nil {
+		return ln.Addr().String()
 	}
 	return s.cfg.Address()
 }
