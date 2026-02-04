@@ -258,7 +258,7 @@ func Verify(path string) error {
 	}
 
 	if len(snapshot.Data) != snapshot.KeyCount {
-		return fmt.Errorf("key count mismatch: expected %d, got %d", 
+		return fmt.Errorf("key count mismatch: expected %d, got %d",
 			snapshot.KeyCount, len(snapshot.Data))
 	}
 

@@ -61,7 +61,7 @@ func setupTestServer(t *testing.T) *testServer {
 }
 
 func (ts *testServer) close() {
-	ts.server.Shutdown()
+	_ = ts.server.Shutdown()
 	ts.engine.Close()
 }
 
@@ -393,7 +393,7 @@ func TestClient_Delete(t *testing.T) {
 	defer client.Close()
 
 	// Setup
-	client.Set("delete_key", "value")
+	_ = client.Set("delete_key", "value")
 
 	// Delete
 	err := client.Delete("delete_key")
@@ -447,8 +447,8 @@ func TestClient_MGet(t *testing.T) {
 	defer client.Close()
 
 	// Setup
-	client.Set("mg1", "value1")
-	client.Set("mg2", "value2")
+	_ = client.Set("mg1", "value1")
+	_ = client.Set("mg2", "value2")
 
 	// MGet
 	values, err := client.MGet([]string{"mg1", "mg2"})
@@ -536,7 +536,7 @@ func BenchmarkPool_GetPut(b *testing.B) {
 	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := api.NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	ts.server = server
@@ -544,7 +544,7 @@ func BenchmarkPool_GetPut(b *testing.B) {
 	ts.addr = server.Addr()
 
 	defer func() {
-		ts.server.Shutdown()
+		_ = ts.server.Shutdown()
 		ts.engine.Close()
 	}()
 
@@ -565,7 +565,7 @@ func BenchmarkClient_Set(b *testing.B) {
 	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := api.NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	ts.server = server
@@ -573,7 +573,7 @@ func BenchmarkClient_Set(b *testing.B) {
 	ts.addr = server.Addr()
 
 	defer func() {
-		ts.server.Shutdown()
+		_ = ts.server.Shutdown()
 		ts.engine.Close()
 	}()
 
@@ -582,7 +582,7 @@ func BenchmarkClient_Set(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.Set("bench", "value")
+		_ = client.Set("bench", "value")
 	}
 }
 
@@ -593,7 +593,7 @@ func BenchmarkClient_Get(b *testing.B) {
 	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := api.NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	ts.server = server
@@ -601,17 +601,17 @@ func BenchmarkClient_Get(b *testing.B) {
 	ts.addr = server.Addr()
 
 	defer func() {
-		ts.server.Shutdown()
+		_ = ts.server.Shutdown()
 		ts.engine.Close()
 	}()
 
 	client, _ := NewClient(ts.addr)
 	defer client.Close()
 
-	client.Set("bench", "value")
+	_ = client.Set("bench", "value")
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		client.Get("bench")
+		_, _ = client.Get("bench")
 	}
 }

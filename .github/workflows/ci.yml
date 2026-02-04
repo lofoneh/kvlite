@@ -18,7 +18,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
+          go-version: '1.23'
           cache: true
 
       - name: Download dependencies
@@ -41,7 +41,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
+          go-version: '1.23'
           cache: true
 
       - name: Run tests with coverage
@@ -64,7 +64,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
+          go-version: '1.23'
           cache: true
 
       - name: Run golangci-lint
@@ -85,7 +85,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25.6'
+          go-version: '1.23'
           cache: true
 
       - name: Build
@@ -108,6 +108,8 @@ jobs:
       - name: Test Docker image
         run: |
           docker run -d --name kvlite-test -p 6380:6380 kvlite:test
-          sleep 2
-          echo "PING" | nc localhost 6380 | grep -q "PONG"
+          sleep 3
+          # Server sends welcome message first, then we send PING and expect +PONG
+          (echo "PING"; sleep 1) | nc localhost 6380 | grep -q "+PONG"
           docker stop kvlite-test
+          docker rm kvlite-test

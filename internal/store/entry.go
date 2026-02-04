@@ -45,12 +45,12 @@ func (e *Entry) TTL() time.Duration {
 	if e.ExpiresAt == 0 {
 		return 0
 	}
-	
+
 	remaining := e.ExpiresAt - time.Now().UnixNano()
 	if remaining <= 0 {
 		return 0
 	}
-	
+
 	return time.Duration(remaining)
 }
 

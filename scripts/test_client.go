@@ -19,7 +19,7 @@ func main() {
 	}
 
 	fmt.Printf("Connecting to kvlite at %s...\n", addr)
-	
+
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		log.Fatalf("Failed to connect: %v", err)
@@ -50,54 +50,54 @@ func main() {
 
 	for _, cmd := range commands {
 		fmt.Printf("> %s\n", cmd)
-		
+
 		// Send command
 		fmt.Fprintf(conn, "%s\n", cmd)
-		
+
 		// Read response
 		response, err := reader.ReadString('\n')
 		if err != nil {
 			log.Printf("Error reading response: %v", err)
 			continue
 		}
-		
+
 		fmt.Printf("< %s", response)
 		time.Sleep(100 * time.Millisecond)
 	}
 
 	fmt.Println("\n✓ All tests completed successfully!")
-	
+
 	// Interactive mode
 	fmt.Println("\nEntering interactive mode. Type 'exit' to quit.")
-	
+
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
 		fmt.Print("> ")
 		if !scanner.Scan() {
 			break
 		}
-		
+
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
-		
+
 		if line == "exit" {
 			break
 		}
-		
+
 		// Send command
 		fmt.Fprintf(conn, "%s\n", line)
-		
+
 		// Read response
 		response, err := reader.ReadString('\n')
 		if err != nil {
 			log.Printf("Error: %v", err)
 			break
 		}
-		
+
 		fmt.Printf("< %s", response)
-		
+
 		if strings.HasPrefix(response, "+OK goodbye") {
 			break
 		}

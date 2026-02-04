@@ -33,10 +33,9 @@ func TestSnapshot_CreateAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to load snapshot: %v", err)
 	}
-
-	// Verify data
 	if snapshot == nil {
 		t.Fatal("Expected snapshot, got nil")
+		return
 	}
 
 	if snapshot.KeyCount != len(data) {
@@ -122,7 +121,7 @@ func TestSnapshot_Exists(t *testing.T) {
 	// Create snapshot
 	writer, _ := NewWriter(Options{Path: tmpDir})
 	data := map[string]string{"key": "value"}
-	writer.Create(data)
+	_ = writer.Create(data)
 
 	// Now should exist
 	if !Exists(tmpDir) {
@@ -135,7 +134,7 @@ func TestSnapshot_Delete(t *testing.T) {
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
 	data := map[string]string{"key": "value"}
-	writer.Create(data)
+	_ = writer.Create(data)
 
 	// Delete snapshot
 	if err := Delete(tmpDir); err != nil {
@@ -161,7 +160,7 @@ func TestSnapshot_Size(t *testing.T) {
 		"key1": "value1",
 		"key2": "value2",
 	}
-	writer.Create(data)
+	_ = writer.Create(data)
 
 	size, err := Size(tmpDir)
 	if err != nil {
@@ -182,7 +181,7 @@ func TestSnapshot_Info(t *testing.T) {
 		"key2": "value2",
 		"key3": "value3",
 	}
-	writer.Create(data)
+	_ = writer.Create(data)
 
 	info, err := Info(tmpDir)
 	if err != nil {
@@ -191,6 +190,7 @@ func TestSnapshot_Info(t *testing.T) {
 
 	if info == nil {
 		t.Fatal("Expected info, got nil")
+		return
 	}
 
 	if info.KeyCount != 3 {
@@ -243,7 +243,7 @@ func TestSnapshot_Verify(t *testing.T) {
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
 	data := map[string]string{"key": "value"}
-	writer.Create(data)
+	_ = writer.Create(data)
 
 	// Verify valid snapshot
 	if err := Verify(tmpDir); err != nil {
@@ -316,7 +316,7 @@ func BenchmarkSnapshot_Create(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		writer.Create(data)
+		_ = writer.Create(data)
 	}
 }
 
@@ -328,10 +328,10 @@ func BenchmarkSnapshot_Load(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		data[fmt.Sprintf("key%d", i)] = fmt.Sprintf("value%d", i)
 	}
-	writer.Create(data)
+	_ = writer.Create(data)
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		Load(tmpDir)
+		_, _ = Load(tmpDir)
 	}
 }

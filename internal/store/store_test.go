@@ -30,7 +30,7 @@ func TestStore_Delete(t *testing.T) {
 	s := New()
 
 	s.Set("key1", "value1")
-	
+
 	// Delete existing key
 	existed := s.Delete("key1")
 	if !existed {
