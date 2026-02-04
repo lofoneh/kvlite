@@ -1,5 +1,10 @@
 # kvlite
 
+[![CI](https://github.com/lofoneh/kvlite/actions/workflows/ci.yml/badge.svg)](https://github.com/lofoneh/kvlite/actions/workflows/ci.yml)
+[![Go Version](https://img.shields.io/badge/go-1.21+-00ADD8?logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
+
 A fast, lightweight in-memory key-value store written in Go with persistence, TTL support, and AI-powered analytics.
 
 ## Features
@@ -218,4 +223,9 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Contributing
 
-Contributions welcome! Please read the contributing guidelines and submit pull requests.
+Contributions welcome! Please read our:
+
+- [Contributing Guide](CONTRIBUTING.md) - How to contribute
+- [Code of Conduct](CODE_OF_CONDUCT.md) - Community guidelines
+
+Whether it's bug reports, feature requests, documentation improvements, or code contributions - we appreciate your help!
