@@ -36,3 +36,5 @@ go.work.sum
 # .vscode/
 .claude/
 CLAUDE.md
+
+node_modules/
