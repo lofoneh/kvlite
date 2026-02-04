@@ -61,7 +61,7 @@ func TestRecord_EncodeDecodeValidate(t *testing.T) {
 
 func TestRecord_CorruptedChecksum(t *testing.T) {
 	record := NewRecord(OpSet, "key", "value")
-	
+
 	// Corrupt the checksum
 	record.Checksum = 12345
 
@@ -247,7 +247,7 @@ func BenchmarkWAL_Write(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		wal.Write(record)
+		_ = wal.Write(record)
 	}
 }
 
@@ -260,6 +260,6 @@ func BenchmarkWAL_WriteSync(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		wal.Write(record)
+		_ = wal.Write(record)
 	}
 }

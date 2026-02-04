@@ -33,7 +33,7 @@ func NewTracker(maxHistorySize int) *Tracker {
 	if maxHistorySize <= 0 {
 		maxHistorySize = 100 // Default: keep last 100 accesses
 	}
-	
+
 	return &Tracker{
 		stats:            make(map[string]*KeyStats),
 		maxHistorySize:   maxHistorySize,

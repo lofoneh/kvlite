@@ -25,12 +25,12 @@ type Engine struct {
 	mu               sync.RWMutex // Protects compaction operations
 	compactionTicker *time.Ticker
 	stopCompaction   chan struct{}
-	
+
 	// Compaction thresholds
 	maxWALEntries int64
 	maxWALSize    int64
 	walEntryCount int64 // Track number of entries
-	
+
 	// Analytics
 	enableAnalytics bool
 	requestCounter  int64
@@ -39,13 +39,13 @@ type Engine struct {
 
 // Options for creating an Engine
 type Options struct {
-	WALPath            string // Path for WAL files
-	SyncMode           bool   // Sync to disk after every write
-	MaxWALEntries      int64  // Trigger compaction after this many entries (default: 10000)
-	MaxWALSize         int64  // Trigger compaction after this size in bytes (default: 10MB)
+	WALPath            string        // Path for WAL files
+	SyncMode           bool          // Sync to disk after every write
+	MaxWALEntries      int64         // Trigger compaction after this many entries (default: 10000)
+	MaxWALSize         int64         // Trigger compaction after this size in bytes (default: 10MB)
 	CompactionInterval time.Duration // How often to check for compaction (default: 1 minute)
-	TTLCheckInterval  time.Duration // How often to check for expired keys (default: 1 second)
-	EnableAnalytics    bool   // Enable AI-powered analytics and smart scheduling
+	TTLCheckInterval   time.Duration // How often to check for expired keys (default: 1 second)
+	EnableAnalytics    bool          // Enable AI-powered analytics and smart scheduling
 }
 
 // New creates a new Engine and recovers from snapshot + WAL if they exist
@@ -100,17 +100,17 @@ func New(opts Options) (*Engine, error) {
 	})
 
 	engine := &Engine{
-		store:            st,
-		wal:              w,
-		snapshotWriter:   sw,
-		ttlManager:       ttlMgr,
-		analytics:        analyticsTracker,
-		scheduler:        smartScheduler,
-		maxWALEntries:    opts.MaxWALEntries,
-		maxWALSize:       opts.MaxWALSize,
-		stopCompaction:   make(chan struct{}),
-		enableAnalytics:  opts.EnableAnalytics,
-		lastRateCheck:    time.Now(),
+		store:           st,
+		wal:             w,
+		snapshotWriter:  sw,
+		ttlManager:      ttlMgr,
+		analytics:       analyticsTracker,
+		scheduler:       smartScheduler,
+		maxWALEntries:   opts.MaxWALEntries,
+		maxWALSize:      opts.MaxWALSize,
+		stopCompaction:  make(chan struct{}),
+		enableAnalytics: opts.EnableAnalytics,
+		lastRateCheck:   time.Now(),
 	}
 
 	// Recover from snapshot and WAL
@@ -122,7 +122,7 @@ func New(opts Options) (*Engine, error) {
 	// Start background processes
 	engine.compactionTicker = time.NewTicker(opts.CompactionInterval)
 	go engine.compactionLoop()
-	
+
 	ttlMgr.Start()
 
 	return engine, nil
@@ -171,7 +171,7 @@ func (e *Engine) recover(path string) error {
 		return fmt.Errorf("failed to replay WAL: %w", err)
 	}
 
-	log.Printf("Recovery complete: %d keys in store, %d WAL entries replayed", 
+	log.Printf("Recovery complete: %d keys in store, %d WAL entries replayed",
 		e.store.Len(), walCount)
 	return nil
 }
@@ -183,7 +183,7 @@ func (e *Engine) Set(key, value string) error {
 		e.analytics.RecordWrite(key)
 		e.trackRequestRate()
 	}
-	
+
 	// Write to WAL first (durability)
 	record := wal.NewRecord(wal.OpSet, key, value)
 	if err := e.wal.Write(record); err != nil {
@@ -192,12 +192,12 @@ func (e *Engine) Set(key, value string) error {
 
 	// Then update in-memory store
 	e.store.Set(key, value)
-	
+
 	// Increment WAL entry count
 	e.mu.Lock()
 	e.walEntryCount++
 	e.mu.Unlock()
-	
+
 	return nil
 }
 
@@ -208,7 +208,7 @@ func (e *Engine) Get(key string) (string, bool) {
 		e.analytics.RecordRead(key)
 		e.trackRequestRate()
 	}
-	
+
 	return e.store.Get(key) // Store handles lazy expiration
 }
 
@@ -222,12 +222,12 @@ func (e *Engine) SetWithTTL(key, value string, ttl time.Duration) error {
 
 	// Then update in-memory store with TTL
 	e.store.SetWithTTL(key, value, ttl)
-	
+
 	// Increment WAL entry count
 	e.mu.Lock()
 	e.walEntryCount++
 	e.mu.Unlock()
-	
+
 	return nil
 }
 
@@ -272,12 +272,12 @@ func (e *Engine) Delete(key string) (bool, error) {
 
 	// Then delete from in-memory store
 	e.store.Delete(key)
-	
+
 	// Increment WAL entry count
 	e.mu.Lock()
 	e.walEntryCount++
 	e.mu.Unlock()
-	
+
 	return true, nil
 }
 
@@ -291,12 +291,12 @@ func (e *Engine) Clear() error {
 
 	// Then clear in-memory store
 	e.store.Clear()
-	
+
 	// Increment WAL entry count
 	e.mu.Lock()
 	e.walEntryCount++
 	e.mu.Unlock()
-	
+
 	return nil
 }
 
@@ -313,18 +313,18 @@ func (e *Engine) Sync() error {
 // Close closes the engine, WAL, and TTL manager
 func (e *Engine) Close() error {
 	log.Println("Closing engine...")
-	
+
 	// Stop TTL manager
 	if e.ttlManager != nil {
 		e.ttlManager.Stop()
 	}
-	
+
 	// Stop compaction loop
 	close(e.stopCompaction)
 	if e.compactionTicker != nil {
 		e.compactionTicker.Stop()
 	}
-	
+
 	if err := e.wal.Close(); err != nil {
 		return fmt.Errorf("failed to close WAL: %w", err)
 	}
@@ -506,11 +506,11 @@ func (e *Engine) trackRequestRate() {
 
 	e.mu.Lock()
 	e.requestCounter++
-	
+
 	// Calculate rate every second
 	now := time.Now()
 	elapsed := now.Sub(e.lastRateCheck)
-	
+
 	if elapsed >= 1*time.Second {
 		rate := float64(e.requestCounter) / elapsed.Seconds()
 		e.scheduler.RecordRequestRate(rate)

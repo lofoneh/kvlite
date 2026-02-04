@@ -94,7 +94,7 @@ func (ts *TestServer) sendCommand(t *testing.T, cmd string) string {
 }
 
 func (ts *TestServer) close() {
-	ts.server.Shutdown()
+	_ = ts.server.Shutdown()
 	ts.engine.Close()
 }
 
@@ -217,7 +217,7 @@ func TestIntegration_Persistence(t *testing.T) {
 	}
 
 	server1 := api.NewServer(cfg1, eng1)
-	go server1.Start()
+	go func() { _ = server1.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	addr1 := server1.Addr()
@@ -229,17 +229,17 @@ func TestIntegration_Persistence(t *testing.T) {
 	}
 	writer := bufio.NewWriter(conn)
 	reader := bufio.NewReader(conn)
-	reader.ReadString('\n') // Welcome
+	_, _ = reader.ReadString('\n') // Welcome
 
 	fmt.Fprintf(writer, "SET persist test_value\n")
-	writer.Flush()
-	reader.ReadString('\n')
+	_ = writer.Flush()
+	_, _ = reader.ReadString('\n')
 
 	// IMPORTANT: Close connection BEFORE shutting down server
 	conn.Close()
 
 	// Close first server
-	server1.Shutdown()
+	_ = server1.Shutdown()
 	eng1.Close()
 
 	time.Sleep(100 * time.Millisecond)
@@ -259,7 +259,7 @@ func TestIntegration_Persistence(t *testing.T) {
 	}
 
 	server2 := api.NewServer(cfg2, eng2)
-	go server2.Start()
+	go func() { _ = server2.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	addr2 := server2.Addr()
@@ -271,10 +271,10 @@ func TestIntegration_Persistence(t *testing.T) {
 	}
 	writer = bufio.NewWriter(conn)
 	reader = bufio.NewReader(conn)
-	reader.ReadString('\n') // Welcome
+	_, _ = reader.ReadString('\n') // Welcome
 
 	fmt.Fprintf(writer, "GET persist\n")
-	writer.Flush()
+	_ = writer.Flush()
 	response, _ := reader.ReadString('\n')
 
 	// Close connection BEFORE shutting down server
@@ -284,7 +284,7 @@ func TestIntegration_Persistence(t *testing.T) {
 		t.Errorf("Data not persisted: %s", response)
 	}
 
-	server2.Shutdown()
+	_ = server2.Shutdown()
 	eng2.Close()
 }
 
@@ -318,13 +318,13 @@ func BenchmarkIntegration_SET(b *testing.B) {
 	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := api.NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	addr := server.Addr()
 
 	defer func() {
-		server.Shutdown()
+		_ = server.Shutdown()
 		eng.Close()
 	}()
 
@@ -333,11 +333,11 @@ func BenchmarkIntegration_SET(b *testing.B) {
 		conn, _ := net.Dial("tcp", addr)
 		writer := bufio.NewWriter(conn)
 		reader := bufio.NewReader(conn)
-		reader.ReadString('\n')
+		_, _ = reader.ReadString('\n')
 
 		fmt.Fprintf(writer, "SET bench value\n")
-		writer.Flush()
-		reader.ReadString('\n')
+		_ = writer.Flush()
+		_, _ = reader.ReadString('\n')
 
 		conn.Close()
 	}

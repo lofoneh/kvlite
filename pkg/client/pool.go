@@ -49,15 +49,15 @@ func NewPool(opts PoolOptions) (*Pool, error) {
 	if opts.Addr == "" {
 		return nil, errors.New("addr is required")
 	}
-	
+
 	if opts.MaxIdle <= 0 {
 		opts.MaxIdle = 5
 	}
-	
+
 	if opts.IdleTimeout == 0 {
 		opts.IdleTimeout = 5 * time.Minute
 	}
-	
+
 	return &Pool{
 		addr:        opts.Addr,
 		maxIdle:     opts.MaxIdle,
@@ -73,11 +73,11 @@ func NewPool(opts PoolOptions) (*Pool, error) {
 func (p *Pool) Get() (*Connection, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	if p.closed {
 		return nil, ErrPoolClosed
 	}
-	
+
 	// Try to get idle connection
 	select {
 	case conn := <-p.conns:
@@ -91,18 +91,18 @@ func (p *Pool) Get() (*Connection, error) {
 	default:
 		// No idle connections
 	}
-	
+
 	// Check if we can create new connection
 	if p.maxActive > 0 && p.active >= p.maxActive {
 		return nil, errors.New("connection pool exhausted")
 	}
-	
+
 	// Create new connection
 	conn, err := p.dial()
 	if err != nil {
 		return nil, err
 	}
-	
+
 	p.active++
 	return conn, nil
 }
@@ -112,15 +112,15 @@ func (p *Pool) Put(conn *Connection) {
 	if conn == nil {
 		return
 	}
-	
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	if p.closed {
 		conn.close()
 		return
 	}
-	
+
 	// Try to return to pool
 	select {
 	case p.conns <- conn:
@@ -138,16 +138,16 @@ func (p *Pool) dial() (*Connection, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect: %w", err)
 	}
-	
+
 	reader := bufio.NewReader(netConn)
 	writer := bufio.NewWriter(netConn)
-	
+
 	// Read welcome message
 	if _, err := reader.ReadString('\n'); err != nil {
 		netConn.Close()
 		return nil, fmt.Errorf("failed to read welcome: %w", err)
 	}
-	
+
 	return &Connection{
 		conn:   netConn,
 		reader: reader,
@@ -160,19 +160,19 @@ func (p *Pool) dial() (*Connection, error) {
 func (p *Pool) Close() error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	if p.closed {
 		return nil
 	}
-	
+
 	p.closed = true
 	close(p.conns)
-	
+
 	// Close all idle connections
 	for conn := range p.conns {
 		conn.close()
 	}
-	
+
 	return nil
 }
 
@@ -180,7 +180,7 @@ func (p *Pool) Close() error {
 func (p *Pool) Stats() map[string]int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	return map[string]int{
 		"active": p.active,
 		"idle":   len(p.conns),
@@ -196,25 +196,25 @@ func (c *Connection) Do(cmd string, args ...string) (string, error) {
 	if len(args) > 0 {
 		fullCmd += " " + strings.Join(args, " ")
 	}
-	
+
 	// Send command
 	if _, err := c.writer.WriteString(fullCmd + "\n"); err != nil {
 		c.close()
 		return "", err
 	}
-	
+
 	if err := c.writer.Flush(); err != nil {
 		c.close()
 		return "", err
 	}
-	
+
 	// Read response
 	response, err := c.reader.ReadString('\n')
 	if err != nil {
 		c.close()
 		return "", err
 	}
-	
+
 	return strings.TrimSpace(response), nil
 }
 
@@ -235,20 +235,20 @@ func (c *Connection) isAlive() bool {
 	if c.conn == nil {
 		return false
 	}
-	
+
 	// Set a short deadline to check
-	c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
-	defer c.conn.SetReadDeadline(time.Time{})
-	
+	_ = c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
+
 	// Try to read (should timeout immediately on healthy connection)
 	buf := make([]byte, 1)
 	_, err := c.conn.Read(buf)
-	
+
 	// If we get a timeout, connection is alive
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		return true
 	}
-	
+
 	// Any other error or successful read means connection is bad
 	return false
 }
@@ -268,7 +268,7 @@ func NewClient(addr string) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return &Client{pool: pool}, nil
 }
 
@@ -279,16 +279,16 @@ func (c *Client) Set(key, value string) error {
 		return err
 	}
 	defer conn.Close()
-	
+
 	response, err := conn.Do("SET", key, value)
 	if err != nil {
 		return err
 	}
-	
+
 	if response != "+OK" {
 		return fmt.Errorf("SET failed: %s", response)
 	}
-	
+
 	return nil
 }
 
@@ -299,16 +299,16 @@ func (c *Client) Get(key string) (string, error) {
 		return "", err
 	}
 	defer conn.Close()
-	
+
 	response, err := conn.Do("GET", key)
 	if err != nil {
 		return "", err
 	}
-	
+
 	if strings.HasPrefix(response, "-ERR") {
 		return "", errors.New(response)
 	}
-	
+
 	return response, nil
 }
 
@@ -319,16 +319,16 @@ func (c *Client) Delete(key string) error {
 		return err
 	}
 	defer conn.Close()
-	
+
 	response, err := conn.Do("DELETE", key)
 	if err != nil {
 		return err
 	}
-	
+
 	if strings.HasPrefix(response, "-ERR") {
 		return errors.New(response)
 	}
-	
+
 	return nil
 }
 
@@ -339,21 +339,21 @@ func (c *Client) MSet(pairs map[string]string) error {
 		return err
 	}
 	defer conn.Close()
-	
+
 	args := make([]string, 0, len(pairs)*2)
 	for k, v := range pairs {
 		args = append(args, k, v)
 	}
-	
+
 	response, err := conn.Do("MSET", args...)
 	if err != nil {
 		return err
 	}
-	
+
 	if response != "+OK" {
 		return fmt.Errorf("MSET failed: %s", response)
 	}
-	
+
 	return nil
 }
 
@@ -364,12 +364,12 @@ func (c *Client) MGet(keys []string) ([]string, error) {
 		return nil, err
 	}
 	defer conn.Close()
-	
+
 	response, err := conn.Do("MGET", keys...)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return strings.Split(response, "\n"), nil
 }
 

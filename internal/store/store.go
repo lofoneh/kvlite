@@ -38,18 +38,18 @@ func (s *Store) SetWithTTL(key, value string, ttl time.Duration) {
 func (s *Store) Get(key string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	entry, ok := s.data[key]
 	if !ok {
 		return "", false
 	}
-	
+
 	// Lazy expiration: delete if expired
 	if entry.IsExpired() {
 		delete(s.data, key)
 		return "", false
 	}
-	
+
 	return entry.Value, true
 }
 
@@ -57,16 +57,16 @@ func (s *Store) Get(key string) (string, bool) {
 func (s *Store) GetEntry(key string) (*Entry, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	entry, ok := s.data[key]
 	if !ok {
 		return nil, false
 	}
-	
+
 	if entry.IsExpired() {
 		return nil, false
 	}
-	
+
 	return entry, true
 }
 
@@ -85,12 +85,12 @@ func (s *Store) Delete(key string) bool {
 func (s *Store) Expire(key string, ttl time.Duration) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	entry, ok := s.data[key]
 	if !ok || entry.IsExpired() {
 		return false
 	}
-	
+
 	entry.SetExpiration(ttl)
 	return true
 }
@@ -100,12 +100,12 @@ func (s *Store) Expire(key string, ttl time.Duration) bool {
 func (s *Store) Persist(key string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	entry, ok := s.data[key]
 	if !ok || entry.IsExpired() {
 		return false
 	}
-	
+
 	entry.RemoveExpiration()
 	return true
 }
@@ -115,12 +115,12 @@ func (s *Store) Persist(key string) bool {
 func (s *Store) TTL(key string) time.Duration {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	entry, ok := s.data[key]
 	if !ok || entry.IsExpired() {
 		return 0
 	}
-	
+
 	return entry.TTL()
 }
 
@@ -128,7 +128,7 @@ func (s *Store) TTL(key string) time.Duration {
 func (s *Store) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	count := 0
 	for _, entry := range s.data {
 		if !entry.IsExpired() {
@@ -150,7 +150,7 @@ func (s *Store) Clear() {
 func (s *Store) Range(f func(key, value string) bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	for key, entry := range s.data {
 		if entry.IsExpired() {
 			continue
@@ -165,7 +165,7 @@ func (s *Store) Range(f func(key, value string) bool) {
 func (s *Store) RangeWithTTL(f func(key string, entry *Entry) bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	for key, entry := range s.data {
 		if entry.IsExpired() {
 			continue
@@ -181,7 +181,7 @@ func (s *Store) RangeWithTTL(f func(key string, entry *Entry) bool) {
 func (s *Store) DeleteExpired() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	deleted := 0
 	for key, entry := range s.data {
 		if entry.IsExpired() {
@@ -197,7 +197,7 @@ func (s *Store) DeleteExpired() int {
 func (s *Store) Keys(pattern string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	var keys []string
 	for key, entry := range s.data {
 		if entry.IsExpired() {
@@ -217,12 +217,12 @@ func matchPattern(pattern, str string) bool {
 	if pattern == "*" {
 		return true
 	}
-	
+
 	// Fast path: exact match
 	if pattern == str {
 		return true
 	}
-	
+
 	return globMatch(pattern, str, 0, 0)
 }
 
@@ -230,29 +230,29 @@ func matchPattern(pattern, str string) bool {
 func globMatch(pattern, str string, pIdx, sIdx int) bool {
 	pLen := len(pattern)
 	sLen := len(str)
-	
+
 	// Both exhausted - match
 	if pIdx == pLen && sIdx == sLen {
 		return true
 	}
-	
+
 	// Pattern exhausted but string not - no match
 	if pIdx == pLen {
 		return false
 	}
-	
+
 	// Check for wildcards
 	if pIdx < pLen && pattern[pIdx] == '*' {
 		// Skip consecutive stars
 		for pIdx < pLen && pattern[pIdx] == '*' {
 			pIdx++
 		}
-		
+
 		// Star at end matches everything
 		if pIdx == pLen {
 			return true
 		}
-		
+
 		// Try matching star with 0 or more characters
 		for sIdx <= sLen {
 			if globMatch(pattern, str, pIdx, sIdx) {
@@ -262,7 +262,7 @@ func globMatch(pattern, str string, pIdx, sIdx int) bool {
 		}
 		return false
 	}
-	
+
 	// String exhausted but pattern not - check if remaining is all stars
 	if sIdx == sLen {
 		for pIdx < pLen {
@@ -273,12 +273,12 @@ func globMatch(pattern, str string, pIdx, sIdx int) bool {
 		}
 		return true
 	}
-	
+
 	// Match single character or ?
 	if pattern[pIdx] == '?' || pattern[pIdx] == str[sIdx] {
 		return globMatch(pattern, str, pIdx+1, sIdx+1)
 	}
-	
+
 	return false
 }
 
@@ -289,11 +289,11 @@ func globMatch(pattern, str string, pIdx, sIdx int) bool {
 func (s *Store) Scan(cursor int, pattern string, count int) (int, []string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	if count <= 0 {
 		count = 10 // Default page size
 	}
-	
+
 	// Collect all matching keys
 	var allKeys []string
 	for key, entry := range s.data {
@@ -304,24 +304,24 @@ func (s *Store) Scan(cursor int, pattern string, count int) (int, []string, bool
 			allKeys = append(allKeys, key)
 		}
 	}
-	
+
 	// Paginate
 	start := cursor
 	if start >= len(allKeys) {
 		return 0, []string{}, false
 	}
-	
+
 	end := start + count
 	hasMore := end < len(allKeys)
 	if end > len(allKeys) {
 		end = len(allKeys)
 	}
-	
+
 	keys := allKeys[start:end]
 	nextCursor := 0
 	if hasMore {
 		nextCursor = end
 	}
-	
+
 	return nextCursor, keys, hasMore
 }
