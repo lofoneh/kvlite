@@ -28,7 +28,7 @@ make run
 
 ```bash
 cd examples/typescript-url-shortener
-npm install
+bun install
 ```
 
 ### 3. Configure environment (optional)
@@ -42,10 +42,10 @@ cp .env.example .env
 
 ```bash
 # Development
-npm run dev
+bun run dev
 
 # Production
-npm run build && npm start
+bun run build && npm start
 ```
 
 ## API Endpoints

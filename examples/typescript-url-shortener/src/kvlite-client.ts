@@ -2,6 +2,55 @@ import * as net from 'net';
 import { EventEmitter } from 'events';
 import { config } from './config';
 
+// ANSI colors for console output
+const colors = {
+  reset: '\x1b[0m',
+  cyan: '\x1b[36m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  gray: '\x1b[90m',
+};
+
+/**
+ * Logger for kvlite commands
+ */
+class KVLiteLogger {
+  private enabled: boolean;
+
+  constructor(enabled: boolean = true) {
+    this.enabled = enabled;
+  }
+
+  private timestamp(): string {
+    return new Date().toISOString().split('T')[1].slice(0, 12);
+  }
+
+  command(cmd: string): void {
+    if (!this.enabled) return;
+    console.log(
+      `${colors.gray}[${this.timestamp()}]${colors.reset} ${colors.cyan}KVLITE >>>>${colors.reset} ${cmd}`
+    );
+  }
+
+  response(resp: string, durationMs: number): void {
+    if (!this.enabled) return;
+    const color = resp.startsWith('-ERR') ? colors.red : colors.green;
+    console.log(
+      `${colors.gray}[${this.timestamp()}]${colors.reset} ${color}KVLITE <<<<${colors.reset} ${resp} ${colors.gray}(${durationMs.toFixed(2)}ms)${colors.reset}`
+    );
+  }
+
+  info(msg: string): void {
+    if (!this.enabled) return;
+    console.log(
+      `${colors.gray}[${this.timestamp()}]${colors.reset} ${colors.yellow}KVLITE${colors.reset} ${msg}`
+    );
+  }
+}
+
+const logger = new KVLiteLogger(config.kvlite.logging);
+
 /**
  * KVLite TCP Client
  * Implements kvlite's line-based protocol using Node.js net module
@@ -34,6 +83,7 @@ export class KVLiteClient extends EventEmitter {
       this.socket.connect(this.port, this.host, () => {
         clearTimeout(timeout);
         this.connected = true;
+        logger.info(`Connected to ${this.host}:${this.port}`);
       });
 
       this.socket.on('data', (data) => {
@@ -82,6 +132,9 @@ export class KVLiteClient extends EventEmitter {
       throw new Error('Not connected to kvlite');
     }
 
+    const startTime = performance.now();
+    logger.command(command);
+
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error('Command timeout'));
@@ -89,6 +142,8 @@ export class KVLiteClient extends EventEmitter {
 
       this.pendingCallbacks.push((response) => {
         clearTimeout(timeout);
+        const duration = performance.now() - startTime;
+        logger.response(response, duration);
         resolve(response);
       });
 

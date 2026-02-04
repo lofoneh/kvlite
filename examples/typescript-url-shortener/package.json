@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "test:load": "ts-node scripts/load-test.ts"
   },
   "keywords": ["kvlite", "url-shortener", "typescript", "express"],
   "license": "MIT",

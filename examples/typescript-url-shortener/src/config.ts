@@ -13,6 +13,7 @@ export const config = {
     port: parseInt(process.env.KVLITE_PORT || '6380', 10),
     connectionTimeout: 5000,
     commandTimeout: 3000,
+    logging: process.env.KVLITE_LOGGING !== 'false', // Enable by default
   },
 
   // URL shortener settings
