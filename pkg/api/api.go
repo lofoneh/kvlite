@@ -18,12 +18,13 @@ import (
 
 // Server handles TCP connections and command processing
 type Server struct {
-	engine         *engine.Engine
-	listener       net.Listener
-	cfg            *config.Config
-	activeConns    int32
-	shutdownChan   chan struct{}
-	wg             sync.WaitGroup
+	engine       *engine.Engine
+	listener     net.Listener
+	listenerMu   sync.RWMutex // Protects listener field
+	cfg          *config.Config
+	activeConns  int32
+	shutdownChan chan struct{}
+	wg           sync.WaitGroup
 }
 
 // NewServer creates a new Server instance
@@ -45,7 +46,9 @@ func (s *Server) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to start server: %w", err)
 	}
+	s.listenerMu.Lock()
 	s.listener = ln
+	s.listenerMu.Unlock()
 	log.Printf("kvlite server listening on %s", s.cfg.Address())
 
 	for {
@@ -71,7 +74,7 @@ func (s *Server) Start() error {
 			current := atomic.LoadInt32(&s.activeConns)
 			if current >= int32(s.cfg.MaxConnections) {
 				log.Printf("connection limit reached, rejecting %s", conn.RemoteAddr())
-				conn.Write([]byte("-ERR connection limit reached\n"))
+				_, _ = conn.Write([]byte("-ERR connection limit reached\n"))
 				conn.Close()
 				continue
 			}
@@ -86,8 +89,11 @@ func (s *Server) Start() error {
 // Shutdown gracefully stops the server
 func (s *Server) Shutdown() error {
 	close(s.shutdownChan)
-	if s.listener != nil {
-		s.listener.Close()
+	s.listenerMu.RLock()
+	ln := s.listener
+	s.listenerMu.RUnlock()
+	if ln != nil {
+		ln.Close()
 	}
 	s.wg.Wait()
 	log.Println("server shutdown complete")
@@ -97,8 +103,11 @@ func (s *Server) Shutdown() error {
 // Addr returns the actual address the server is listening on.
 // This is useful when using port 0 for OS-assigned random port.
 func (s *Server) Addr() string {
-	if s.listener != nil {
-		return s.listener.Addr().String()
+	s.listenerMu.RLock()
+	ln := s.listener
+	s.listenerMu.RUnlock()
+	if ln != nil {
+		return ln.Addr().String()
 	}
 	return s.cfg.Address()
 }
@@ -118,8 +127,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 	writer := bufio.NewWriter(conn)
 
 	// Send welcome message
-	writer.WriteString("+OK kvlite ready\n")
-	writer.Flush()
+	_, _ = writer.WriteString("+OK kvlite ready\n")
+	_ = writer.Flush()
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -130,8 +139,8 @@ func (s *Server) handleConnection(conn net.Conn) {
 		}
 
 		response := s.processCommand(line)
-		writer.WriteString(response + "\n")
-		writer.Flush()
+		_, _ = writer.WriteString(response + "\n")
+		_ = writer.Flush()
 
 		// Handle QUIT command
 		if strings.HasPrefix(response, "+OK goodbye") {
@@ -368,33 +377,33 @@ func (s *Server) processCommand(line string) string {
 			needsCompaction,
 			ttlExpired,
 			ttlChecks)
-		
+
 		// Add analytics stats if enabled
 		if analyticsEnabled, ok := stats["analytics_enabled"].(bool); ok && analyticsEnabled {
 			totalReads := stats["total_reads"].(int64)
 			totalWrites := stats["total_writes"].(int64)
 			result += fmt.Sprintf(" reads=%d writes=%d", totalReads, totalWrites)
 		}
-		
+
 		return result
-	
+
 	case "ANALYZE":
 		if len(parts) < 2 {
 			return "-ERR ANALYZE requires key"
 		}
 		key := parts[1]
-		
+
 		keyStats := s.engine.GetKeyStats(key)
 		if keyStats == nil {
 			return "-ERR analytics not enabled or key not found"
 		}
-		
+
 		return fmt.Sprintf("+OK reads=%d writes=%d last_access=%s created=%s",
 			keyStats.Reads,
 			keyStats.Writes,
 			keyStats.LastAccess.Format(time.RFC3339),
 			keyStats.CreatedAt.Format(time.RFC3339))
-	
+
 	case "HOTKEYS":
 		count := 10
 		if len(parts) >= 2 {
@@ -404,53 +413,53 @@ func (s *Server) processCommand(line string) string {
 				return "-ERR invalid count"
 			}
 		}
-		
+
 		hotKeys := s.engine.GetHotKeys(count)
 		if hotKeys == nil {
 			return "-ERR analytics not enabled"
 		}
-		
+
 		if len(hotKeys) == 0 {
 			return "(empty list)"
 		}
-		
+
 		result := ""
 		for _, stats := range hotKeys {
 			result += fmt.Sprintf("%s (reads=%d writes=%d)\n", stats.Key, stats.Reads, stats.Writes)
 		}
 		return strings.TrimSuffix(result, "\n")
-	
+
 	case "SUGGEST-TTL":
 		if len(parts) < 2 {
 			return "-ERR SUGGEST-TTL requires key"
 		}
 		key := parts[1]
-		
+
 		suggestedTTL := s.engine.SuggestTTL(key)
 		if suggestedTTL == 0 {
 			return "-ERR analytics not enabled or insufficient data"
 		}
-		
+
 		seconds := int64(suggestedTTL.Seconds())
 		return fmt.Sprintf("%d", seconds)
-	
+
 	case "ANOMALIES":
 		anomalies := s.engine.DetectAnomalies()
 		if anomalies == nil {
 			return "-ERR analytics not enabled"
 		}
-		
+
 		if len(anomalies) == 0 {
 			return "(no anomalies detected)"
 		}
-		
+
 		return strings.Join(anomalies, "\n")
-		
+
 	case "MSET":
 		if len(parts) < 3 || len(parts)%2 != 1 {
 			return "-ERR MSET requires key value pairs"
 		}
-		
+
 		// Batch set operation
 		for i := 1; i < len(parts); i += 2 {
 			key := parts[i]
@@ -465,7 +474,7 @@ func (s *Server) processCommand(line string) string {
 		if len(parts) < 2 {
 			return "-ERR MGET requires at least one key"
 		}
-		
+
 		// Batch get operation
 		var results []string
 		for _, key := range parts[1:] {
@@ -482,7 +491,7 @@ func (s *Server) processCommand(line string) string {
 		if len(parts) < 2 {
 			return "-ERR MDEL requires at least one key"
 		}
-		
+
 		// Batch delete operation
 		deleted := 0
 		for _, key := range parts[1:] {
@@ -496,11 +505,11 @@ func (s *Server) processCommand(line string) string {
 		// Health check endpoint
 		walSize, walErr := s.engine.WALSize()
 		status := "healthy"
-		
+
 		if walErr != nil {
 			status = "degraded"
 		}
-		
+
 		health := fmt.Sprintf(`{
 	"status": "%s",
 	"keys": %d,
@@ -508,14 +517,14 @@ func (s *Server) processCommand(line string) string {
 	"wal_size": %d,
 	"wal_healthy": %v
 	}`, status, s.engine.Len(), atomic.LoadInt32(&s.activeConns), walSize, walErr == nil)
-		
+
 		return health
 
 	case "CONFIG":
 		if len(parts) < 2 {
 			return "-ERR CONFIG requires subcommand"
 		}
-		
+
 		subCmd := strings.ToUpper(parts[1])
 		switch subCmd {
 		case "GET":
@@ -542,11 +551,11 @@ func (s *Server) processCommand(line string) string {
 			return "-ERR INCR requires key"
 		}
 		key := parts[1]
-		
+
 		// Get current value
 		val, exists := s.engine.Get(key)
 		current := int64(0)
-		
+
 		if exists {
 			var err error
 			current, err = strconv.ParseInt(val, 10, 64)
@@ -554,15 +563,15 @@ func (s *Server) processCommand(line string) string {
 				return "-ERR value is not an integer"
 			}
 		}
-		
+
 		// Increment
 		current++
 		newVal := strconv.FormatInt(current, 10)
-		
+
 		if err := s.engine.Set(key, newVal); err != nil {
 			return fmt.Sprintf("-ERR failed to set: %v", err)
 		}
-		
+
 		return fmt.Sprintf("%d", current)
 
 	case "DECR":
@@ -570,11 +579,11 @@ func (s *Server) processCommand(line string) string {
 			return "-ERR DECR requires key"
 		}
 		key := parts[1]
-		
+
 		// Get current value
 		val, exists := s.engine.Get(key)
 		current := int64(0)
-		
+
 		if exists {
 			var err error
 			current, err = strconv.ParseInt(val, 10, 64)
@@ -582,15 +591,15 @@ func (s *Server) processCommand(line string) string {
 				return "-ERR value is not an integer"
 			}
 		}
-		
+
 		// Decrement
 		current--
 		newVal := strconv.FormatInt(current, 10)
-		
+
 		if err := s.engine.Set(key, newVal); err != nil {
 			return fmt.Sprintf("-ERR failed to set: %v", err)
 		}
-		
+
 		return fmt.Sprintf("%d", current)
 
 	case "APPEND":
@@ -599,19 +608,19 @@ func (s *Server) processCommand(line string) string {
 		}
 		key := parts[1]
 		appendVal := strings.Join(parts[2:], " ")
-		
+
 		// Get current value
 		val, exists := s.engine.Get(key)
 		if !exists {
 			val = ""
 		}
-		
+
 		// Append
 		newVal := val + appendVal
 		if err := s.engine.Set(key, newVal); err != nil {
 			return fmt.Sprintf("-ERR failed to set: %v", err)
 		}
-		
+
 		return fmt.Sprintf("%d", len(newVal))
 
 	case "STRLEN":
@@ -619,12 +628,12 @@ func (s *Server) processCommand(line string) string {
 			return "-ERR STRLEN requires key"
 		}
 		key := parts[1]
-		
+
 		val, exists := s.engine.Get(key)
 		if !exists {
 			return "0"
 		}
-		
+
 		return fmt.Sprintf("%d", len(val))
 
 	default:

@@ -75,7 +75,7 @@ func unescape(s string) string {
 func (r *Record) Encode() string {
 	key := escape(r.Key)
 	value := escape(r.Value)
-	
+
 	return fmt.Sprintf("%d|%s|%s|%s|%d\n", r.Timestamp, r.Op, key, value, r.Checksum)
 }
 
@@ -138,37 +138,37 @@ func splitRecord(line string) []string {
 
 	for i := 0; i < len(line); i++ {
 		c := line[i]
-		
+
 		if escaped {
 			current.WriteByte(c)
 			escaped = false
 			continue
 		}
-		
+
 		if c == '\\' {
 			current.WriteByte(c)
 			escaped = true
 			continue
 		}
-		
+
 		if c == '|' {
 			parts = append(parts, current.String())
 			current.Reset()
 			continue
 		}
-		
+
 		current.WriteByte(c)
 	}
-	
+
 	// Add the last part
 	parts = append(parts, current.String())
-	
+
 	return parts
 }
 
 // String returns a human-readable representation
 func (r *Record) String() string {
 	t := time.Unix(0, r.Timestamp)
-	return fmt.Sprintf("[%s] %s %s=%s (checksum: %d)", 
+	return fmt.Sprintf("[%s] %s %s=%s (checksum: %d)",
 		t.Format(time.RFC3339), r.Op, r.Key, r.Value, r.Checksum)
 }

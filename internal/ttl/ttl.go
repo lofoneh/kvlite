@@ -9,13 +9,13 @@ import (
 
 // Manager handles automatic expiration of keys
 type Manager struct {
-	store          StoreInterface
-	ticker         *time.Ticker
-	stopChan       chan struct{}
-	wg             sync.WaitGroup
-	checkInterval  time.Duration
-	stats          Stats
-	mu             sync.RWMutex
+	store         StoreInterface
+	ticker        *time.Ticker
+	stopChan      chan struct{}
+	wg            sync.WaitGroup
+	checkInterval time.Duration
+	stats         Stats
+	mu            sync.RWMutex
 }
 
 // StoreInterface defines the methods needed from store
@@ -53,7 +53,7 @@ func NewManager(store StoreInterface, opts Options) *Manager {
 func (m *Manager) Start() {
 	m.ticker = time.NewTicker(m.checkInterval)
 	m.wg.Add(1)
-	
+
 	go m.expirationLoop()
 	log.Printf("TTL manager started (check interval: %v)", m.checkInterval)
 }

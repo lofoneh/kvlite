@@ -39,7 +39,7 @@ func TestEngine_Delete(t *testing.T) {
 	defer engine.Close()
 
 	// Set and delete
-	engine.Set("key1", "value1")
+	_ = engine.Set("key1", "value1")
 	deleted, err := engine.Delete("key1")
 	if err != nil {
 		t.Fatalf("Failed to delete: %v", err)
@@ -74,9 +74,9 @@ func TestEngine_Clear(t *testing.T) {
 	defer engine.Close()
 
 	// Set multiple values
-	engine.Set("key1", "value1")
-	engine.Set("key2", "value2")
-	engine.Set("key3", "value3")
+	_ = engine.Set("key1", "value1")
+	_ = engine.Set("key2", "value2")
+	_ = engine.Set("key3", "value3")
 
 	if engine.Len() != 3 {
 		t.Errorf("Expected 3 keys, got %d", engine.Len())
@@ -101,10 +101,10 @@ func TestEngine_Recovery(t *testing.T) {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 
-	engine1.Set("key1", "value1")
-	engine1.Set("key2", "value2")
-	engine1.Delete("key1")
-	engine1.Set("key3", "value3")
+	_ = engine1.Set("key1", "value1")
+	_ = engine1.Set("key2", "value2")
+	_, _ = engine1.Delete("key1")
+	_ = engine1.Set("key3", "value3")
 
 	// Close engine (simulating restart)
 	if err := engine1.Close(); err != nil {
@@ -148,10 +148,10 @@ func TestEngine_RecoveryWithClear(t *testing.T) {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 
-	engine1.Set("key1", "value1")
-	engine1.Set("key2", "value2")
-	engine1.Clear()
-	engine1.Set("key3", "value3")
+	_ = engine1.Set("key1", "value1")
+	_ = engine1.Set("key2", "value2")
+	_ = engine1.Clear()
+	_ = engine1.Set("key3", "value3")
 	engine1.Close()
 
 	// Recover
@@ -177,17 +177,17 @@ func TestEngine_MultipleCycles(t *testing.T) {
 
 	// Cycle 1
 	e1, _ := New(Options{WALPath: tmpDir})
-	e1.Set("key1", "v1")
+	_ = e1.Set("key1", "v1")
 	e1.Close()
 
 	// Cycle 2
 	e2, _ := New(Options{WALPath: tmpDir})
-	e2.Set("key2", "v2")
+	_ = e2.Set("key2", "v2")
 	e2.Close()
 
 	// Cycle 3
 	e3, _ := New(Options{WALPath: tmpDir})
-	e3.Set("key3", "v3")
+	_ = e3.Set("key3", "v3")
 	e3.Close()
 
 	// Verify all data persisted
@@ -218,7 +218,7 @@ func BenchmarkEngine_Set(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		engine.Set("key", "value")
+		_ = engine.Set("key", "value")
 	}
 }
 
@@ -227,10 +227,10 @@ func BenchmarkEngine_Get(b *testing.B) {
 	engine, _ := New(Options{WALPath: tmpDir})
 	defer engine.Close()
 
-	engine.Set("key", "value")
+	_ = engine.Set("key", "value")
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		engine.Get("key")
+		_, _ = engine.Get("key")
 	}
 }

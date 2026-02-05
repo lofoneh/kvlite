@@ -165,7 +165,7 @@ func (rl *RateLimiter) TokenBucketLimit(identifier string, bucketSize int, refil
 	// Save state
 	rl.sendCommand(fmt.Sprintf("SET %s %.2f", key, tokens))
 	rl.sendCommand(fmt.Sprintf("SET %s %d", timestampKey, now))
-	rl.sendCommand(fmt.Sprintf("EXPIRE %s 3600", key))        // 1 hour cleanup
+	rl.sendCommand(fmt.Sprintf("EXPIRE %s 3600", key))          // 1 hour cleanup
 	rl.sendCommand(fmt.Sprintf("EXPIRE %s 3600", timestampKey)) // 1 hour cleanup
 
 	return allowed, int(tokens), nil
@@ -312,9 +312,9 @@ func main() {
 	// Example 6: API Endpoint Rate Limiting
 	fmt.Println("\n6. Per-Endpoint Rate Limiting")
 	endpoints := map[string]int{
-		"/api/search":  10,  // Expensive operation
-		"/api/users":   100, // Normal operation
-		"/api/health":  1000, // Health check
+		"/api/search": 10,   // Expensive operation
+		"/api/users":  100,  // Normal operation
+		"/api/health": 1000, // Health check
 	}
 
 	for endpoint, limit := range endpoints {

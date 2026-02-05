@@ -66,7 +66,7 @@ func setupTestHelper(t *testing.T) *testHelper {
 }
 
 func (h *testHelper) close() {
-	h.server.Shutdown()
+	_ = h.server.Shutdown()
 	h.engine.Close()
 }
 
@@ -120,7 +120,7 @@ func (h *testHelper) sendMultilineCommand(cmd string) []string {
 	writer.Flush()
 
 	// Read all lines until empty response or timeout
-	conn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	_ = conn.SetReadDeadline(time.Now().Add(1 * time.Second))
 	var responses []string
 	for {
 		response, err := reader.ReadString('\n')
@@ -768,7 +768,7 @@ func TestServer_EmptyCommand(t *testing.T) {
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
 
-	reader.ReadString('\n') // Welcome
+	_, _ = reader.ReadString('\n') // Welcome
 
 	// Send empty line then PING
 	fmt.Fprintf(writer, "\n")
@@ -819,13 +819,13 @@ func TestServer_MaxConnections(t *testing.T) {
 	})
 
 	server := NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	addr := server.Addr()
 
 	defer func() {
-		server.Shutdown()
+		_ = server.Shutdown()
 		eng.Close()
 	}()
 
@@ -915,13 +915,13 @@ func BenchmarkServer_SET(b *testing.B) {
 	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	addr := server.Addr()
 
 	defer func() {
-		server.Shutdown()
+		_ = server.Shutdown()
 		eng.Close()
 	}()
 
@@ -930,11 +930,11 @@ func BenchmarkServer_SET(b *testing.B) {
 		conn, _ := net.Dial("tcp", addr)
 		reader := bufio.NewReader(conn)
 		writer := bufio.NewWriter(conn)
-		reader.ReadString('\n')
+		_, _ = reader.ReadString('\n')
 
 		fmt.Fprintf(writer, "SET bench value\n")
-		writer.Flush()
-		reader.ReadString('\n')
+		_ = writer.Flush()
+		_, _ = reader.ReadString('\n')
 
 		conn.Close()
 	}
@@ -945,7 +945,7 @@ func BenchmarkServer_GET(b *testing.B) {
 	cfg := &config.Config{Host: "localhost", Port: 0}
 	eng, _ := engine.New(engine.Options{WALPath: tmpDir})
 	server := NewServer(cfg, eng)
-	go server.Start()
+	go func() { _ = server.Start() }()
 	time.Sleep(100 * time.Millisecond)
 
 	addr := server.Addr()
@@ -954,14 +954,14 @@ func BenchmarkServer_GET(b *testing.B) {
 	conn, _ := net.Dial("tcp", addr)
 	reader := bufio.NewReader(conn)
 	writer := bufio.NewWriter(conn)
-	reader.ReadString('\n')
+	_, _ = reader.ReadString('\n')
 	fmt.Fprintf(writer, "SET bench value\n")
-	writer.Flush()
-	reader.ReadString('\n')
+	_ = writer.Flush()
+	_, _ = reader.ReadString('\n')
 	conn.Close()
 
 	defer func() {
-		server.Shutdown()
+		_ = server.Shutdown()
 		eng.Close()
 	}()
 
@@ -970,11 +970,11 @@ func BenchmarkServer_GET(b *testing.B) {
 		conn, _ := net.Dial("tcp", addr)
 		reader := bufio.NewReader(conn)
 		writer := bufio.NewWriter(conn)
-		reader.ReadString('\n')
+		_, _ = reader.ReadString('\n')
 
 		fmt.Fprintf(writer, "GET bench\n")
-		writer.Flush()
-		reader.ReadString('\n')
+		_ = writer.Flush()
+		_, _ = reader.ReadString('\n')
 
 		conn.Close()
 	}

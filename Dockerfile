@@ -1,7 +1,7 @@
 # Dockerfile for kvlite
 
 # Build stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 # Install build dependencies
 RUN apk add --no-cache git make
@@ -33,8 +33,9 @@ COPY --from=builder /build/kvlite .
 # Expose port
 EXPOSE 6380
 
-# Create non-root user
-RUN addgroup -S kvlite && adduser -S kvlite -G kvlite
+# Create non-root user and data directory with proper ownership
+RUN addgroup -S kvlite && adduser -S kvlite -G kvlite && \
+    mkdir -p /app/data && chown -R kvlite:kvlite /app/data
 USER kvlite
 
 # Run the binary

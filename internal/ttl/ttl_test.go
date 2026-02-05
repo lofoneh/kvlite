@@ -104,7 +104,7 @@ func TestManager_Stats(t *testing.T) {
 	mgr.Stop()
 
 	stats := mgr.Stats()
-	
+
 	if stats.ChecksPerformed == 0 {
 		t.Error("Expected some checks performed")
 	}
