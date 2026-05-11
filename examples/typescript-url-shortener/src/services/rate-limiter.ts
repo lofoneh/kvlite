@@ -1,4 +1,4 @@
-import { getKVLiteClient, KVLiteClient } from '../kvlite-client';
+import { getKVLiteClient, KVLitePool } from '../kvlite-client';
 import { config } from '../config';
 import { RateLimitResult } from '../types';
 
@@ -7,7 +7,7 @@ import { RateLimitResult } from '../types';
  * Based on the pattern from examples/rate_limiting/main.go
  */
 export class RateLimiter {
-  private client: KVLiteClient | null = null;
+  private client: KVLitePool | null = null;
 
   /**
    * Check rate limit for an identifier (IP, API key, etc.)

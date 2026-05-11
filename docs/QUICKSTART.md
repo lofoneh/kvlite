@@ -321,6 +321,18 @@ another_key (reads=100 writes=5)
 - Check out [examples/](../examples/) for usage patterns
 - See [TESTING.md](TESTING.md) for running tests
 
+## Protocol Limits and Caveats
+
+The wire format is a single line per command, fields separated by spaces and
+terminated by `\n`. Two consequences worth knowing:
+
+- **Maximum command size: 4 MB.** Larger SET/MSET payloads are rejected (the
+  server's read buffer caps at this size).
+- **Values cannot contain `\n` and runs of spaces are collapsed.** Example:
+  `SET k "a   b"` stores the value as `"a b"`. If you need byte-exact
+  round-trip for arbitrary text, encode the value first (base64, URL-encode,
+  etc.) before SET, and decode after GET.
+
 ## Troubleshooting
 
 ### Connection Refused

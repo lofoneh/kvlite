@@ -11,12 +11,23 @@ import (
 	"time"
 )
 
+// CurrentVersion is the snapshot format version this binary writes.
+// Snapshots with a different version are rejected on Load.
+const CurrentVersion = 2
+
+// EntryData is the per-key payload in a v2 snapshot. ExpiresAt is Unix nano;
+// 0 means no TTL.
+type EntryData struct {
+	Value     string `json:"value"`
+	ExpiresAt int64  `json:"expires_at,omitempty"`
+}
+
 // Snapshot represents a point-in-time backup of the store
 type Snapshot struct {
-	Timestamp int64             `json:"timestamp"` // Unix nano
-	Version   int               `json:"version"`   // Snapshot format version
-	KeyCount  int               `json:"key_count"` // Number of keys
-	Data      map[string]string `json:"data"`      // The actual key-value data
+	Timestamp int64                `json:"timestamp"` // Unix nano
+	Version   int                  `json:"version"`   // Snapshot format version
+	KeyCount  int                  `json:"key_count"` // Number of keys
+	Data      map[string]EntryData `json:"data"`      // The actual key-value data
 }
 
 // Options for snapshot operations
@@ -45,12 +56,12 @@ func NewWriter(opts Options) (*Writer, error) {
 	}, nil
 }
 
-// Create writes a snapshot of the provided data
-// Uses atomic write: write to temp file, then rename
-func (w *Writer) Create(data map[string]string) error {
+// Create writes a snapshot of the provided data.
+// Uses atomic write: write to temp file, then rename.
+func (w *Writer) Create(data map[string]EntryData) error {
 	snapshot := &Snapshot{
 		Timestamp: time.Now().UnixNano(),
-		Version:   1,
+		Version:   CurrentVersion,
 		KeyCount:  len(data),
 		Data:      data,
 	}
@@ -97,14 +108,14 @@ func (w *Writer) Create(data map[string]string) error {
 	return nil
 }
 
-// Load reads and returns a snapshot
+// Load reads and returns a snapshot.
+// Snapshots written by an older format version are rejected with a clear error.
 func Load(path string) (*Snapshot, error) {
 	snapshotPath := filepath.Join(path, "kvlite.snapshot")
 
 	file, err := os.Open(snapshotPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// No snapshot exists yet
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to open snapshot: %w", err)
@@ -115,6 +126,10 @@ func Load(path string) (*Snapshot, error) {
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&snapshot); err != nil {
 		return nil, fmt.Errorf("failed to decode snapshot: %w", err)
+	}
+
+	if snapshot.Version != CurrentVersion {
+		return nil, fmt.Errorf("incompatible snapshot version %d (this binary expects v%d). Remove %s to start fresh, or replay with the older binary", snapshot.Version, CurrentVersion, snapshotPath)
 	}
 
 	return &snapshot, nil
@@ -195,10 +210,10 @@ type SnapshotInfo struct {
 }
 
 // Export writes a snapshot to an arbitrary path (for backup/export)
-func Export(data map[string]string, destPath string) error {
+func Export(data map[string]EntryData, destPath string) error {
 	snapshot := &Snapshot{
 		Timestamp: time.Now().UnixNano(),
-		Version:   1,
+		Version:   CurrentVersion,
 		KeyCount:  len(data),
 		Data:      data,
 	}
@@ -225,7 +240,7 @@ func Export(data map[string]string, destPath string) error {
 }
 
 // Import reads a snapshot from an arbitrary path
-func Import(srcPath string) (map[string]string, error) {
+func Import(srcPath string) (map[string]EntryData, error) {
 	file, err := os.Open(srcPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open import file: %w", err)
@@ -236,6 +251,9 @@ func Import(srcPath string) (map[string]string, error) {
 	decoder := json.NewDecoder(file)
 	if err := decoder.Decode(&snapshot); err != nil {
 		return nil, fmt.Errorf("failed to decode snapshot: %w", err)
+	}
+	if snapshot.Version != CurrentVersion {
+		return nil, fmt.Errorf("incompatible snapshot version %d (this binary expects v%d)", snapshot.Version, CurrentVersion)
 	}
 
 	return snapshot.Data, nil
@@ -252,9 +270,8 @@ func Verify(path string) error {
 		return fmt.Errorf("no snapshot found")
 	}
 
-	// Basic validation
-	if snapshot.Version != 1 {
-		return fmt.Errorf("unsupported snapshot version: %d", snapshot.Version)
+	if snapshot.Version != CurrentVersion {
+		return fmt.Errorf("unsupported snapshot version: %d (expected %d)", snapshot.Version, CurrentVersion)
 	}
 
 	if len(snapshot.Data) != snapshot.KeyCount {
@@ -266,10 +283,10 @@ func Verify(path string) error {
 }
 
 // Stream writes a snapshot using streaming to handle large datasets
-func Stream(data map[string]string, w io.Writer) error {
+func Stream(data map[string]EntryData, w io.Writer) error {
 	snapshot := &Snapshot{
 		Timestamp: time.Now().UnixNano(),
-		Version:   1,
+		Version:   CurrentVersion,
 		KeyCount:  len(data),
 		Data:      data,
 	}

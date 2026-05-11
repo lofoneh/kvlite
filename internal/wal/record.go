@@ -18,16 +18,20 @@ const (
 	OpClear  OpType = "CLEAR"
 )
 
-// Record represents a single WAL entry
+// Record represents a single WAL entry.
+//
+// Format on disk (v2): timestamp|op|key|value|expires_at|checksum\n
+// expires_at is Unix nanoseconds; 0 means no TTL.
 type Record struct {
 	Timestamp int64  // Unix timestamp in nanoseconds
 	Op        OpType // Operation type
 	Key       string // Key (empty for CLEAR)
 	Value     string // Value (empty for DELETE and CLEAR)
+	ExpiresAt int64  // Unix nano expiration; 0 = no TTL
 	Checksum  uint32 // CRC32 checksum for integrity
 }
 
-// NewRecord creates a new WAL record
+// NewRecord creates a new WAL record without TTL
 func NewRecord(op OpType, key, value string) *Record {
 	r := &Record{
 		Timestamp: time.Now().UnixNano(),
@@ -39,9 +43,38 @@ func NewRecord(op OpType, key, value string) *Record {
 	return r
 }
 
+// NewRecordWithTTL creates a new WAL record carrying the absolute expiration
+// derived from now+ttl. ttl <= 0 means no TTL.
+func NewRecordWithTTL(op OpType, key, value string, ttl time.Duration) *Record {
+	r := &Record{
+		Timestamp: time.Now().UnixNano(),
+		Op:        op,
+		Key:       key,
+		Value:     value,
+	}
+	if ttl > 0 {
+		r.ExpiresAt = r.Timestamp + int64(ttl)
+	}
+	r.Checksum = r.calculateChecksum()
+	return r
+}
+
+// TTL returns the remaining time-to-live for the record's expiration,
+// or 0 if it has no TTL or is already expired.
+func (r *Record) TTL() time.Duration {
+	if r.ExpiresAt == 0 {
+		return 0
+	}
+	remaining := r.ExpiresAt - time.Now().UnixNano()
+	if remaining <= 0 {
+		return 0
+	}
+	return time.Duration(remaining)
+}
+
 // calculateChecksum computes CRC32 checksum of the record data
 func (r *Record) calculateChecksum() uint32 {
-	data := fmt.Sprintf("%d|%s|%s|%s", r.Timestamp, r.Op, r.Key, r.Value)
+	data := fmt.Sprintf("%d|%s|%s|%s|%d", r.Timestamp, r.Op, r.Key, r.Value, r.ExpiresAt)
 	return crc32.ChecksumIEEE([]byte(data))
 }
 
@@ -70,46 +103,50 @@ func unescape(s string) string {
 	return s
 }
 
-// Encode converts the record to a string format for writing to disk
-// Format: timestamp|operation|key|value|checksum\n
+// Encode converts the record to a string format for writing to disk.
+// Format (v2): timestamp|operation|key|value|expires_at|checksum\n
 func (r *Record) Encode() string {
 	key := escape(r.Key)
 	value := escape(r.Value)
-
-	return fmt.Sprintf("%d|%s|%s|%s|%d\n", r.Timestamp, r.Op, key, value, r.Checksum)
+	return fmt.Sprintf("%d|%s|%s|%s|%d|%d\n", r.Timestamp, r.Op, key, value, r.ExpiresAt, r.Checksum)
 }
 
-// Decode parses a string into a Record
+// Decode parses a string into a Record.
+// Only the v2 6-field format is accepted; v1 (5-field) WALs from kvlite < 0.5.0
+// must be replayed with the older binary or discarded.
 func Decode(line string) (*Record, error) {
 	line = strings.TrimSpace(line)
 	if line == "" {
 		return nil, fmt.Errorf("empty line")
 	}
 
-	// Split carefully - we need to handle escaped pipes
 	parts := splitRecord(line)
-	if len(parts) != 5 {
-		return nil, fmt.Errorf("invalid record format: expected 5 fields, got %d", len(parts))
+	if len(parts) == 5 {
+		return nil, fmt.Errorf("legacy v1 WAL record detected (5 fields); kvlite >= 0.5.0 uses 6-field v2 format. Replay with the older binary or remove the WAL/snapshot to start fresh")
+	}
+	if len(parts) != 6 {
+		return nil, fmt.Errorf("invalid record format: expected 6 fields, got %d", len(parts))
 	}
 
-	// Parse timestamp
 	timestamp, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
 		return nil, fmt.Errorf("invalid timestamp: %w", err)
 	}
 
-	// Parse operation
 	op := OpType(parts[1])
 	if op != OpSet && op != OpDelete && op != OpClear {
 		return nil, fmt.Errorf("invalid operation: %s", op)
 	}
 
-	// Unescape key and value
 	key := unescape(parts[2])
 	value := unescape(parts[3])
 
-	// Parse checksum
-	checksum, err := strconv.ParseUint(parts[4], 10, 32)
+	expiresAt, err := strconv.ParseInt(parts[4], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid expires_at: %w", err)
+	}
+
+	checksum, err := strconv.ParseUint(parts[5], 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("invalid checksum: %w", err)
 	}
@@ -119,10 +156,10 @@ func Decode(line string) (*Record, error) {
 		Op:        op,
 		Key:       key,
 		Value:     value,
+		ExpiresAt: expiresAt,
 		Checksum:  uint32(checksum),
 	}
 
-	// Validate checksum
 	if err := record.Validate(); err != nil {
 		return nil, fmt.Errorf("record validation failed: %w", err)
 	}
