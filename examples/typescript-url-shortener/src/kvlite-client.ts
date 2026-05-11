@@ -12,9 +12,6 @@ const colors = {
   gray: '\x1b[90m',
 };
 
-/**
- * Logger for kvlite commands
- */
 class KVLiteLogger {
   private enabled: boolean;
 
@@ -52,10 +49,14 @@ class KVLiteLogger {
 const logger = new KVLiteLogger(config.kvlite.logging);
 
 /**
- * KVLite TCP Client
- * Implements kvlite's line-based protocol using Node.js net module
+ * KVLiteConnection wraps a single TCP socket speaking kvlite's line protocol.
+ *
+ * IMPORTANT: this class assumes one response line per command. Multi-line
+ * responses (KEYS, MGET, HOTKEYS, SCAN, ANOMALIES) will desynchronize the
+ * pendingCallbacks queue. Add only single-line commands here, or rework the
+ * framing if you need multi-line support.
  */
-export class KVLiteClient extends EventEmitter {
+export class KVLiteConnection extends EventEmitter {
   private socket: net.Socket | null = null;
   private connected: boolean = false;
   private responseBuffer: string = '';
@@ -68,9 +69,6 @@ export class KVLiteClient extends EventEmitter {
     super();
   }
 
-  /**
-   * Connect to kvlite server
-   */
   async connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       this.socket = new net.Socket();
@@ -102,16 +100,13 @@ export class KVLiteClient extends EventEmitter {
         this.emit('close');
       });
 
-      // Handle welcome message "+OK kvlite ready\n"
+      // Welcome message "+OK kvlite ready\n"
       this.socket.once('data', () => {
         resolve();
       });
     });
   }
 
-  /**
-   * Process response buffer for line-based protocol
-   */
   private processBuffer(): void {
     const lines = this.responseBuffer.split('\n');
     this.responseBuffer = lines.pop() || '';
@@ -124,10 +119,7 @@ export class KVLiteClient extends EventEmitter {
     }
   }
 
-  /**
-   * Send command and wait for response
-   */
-  private async sendCommand(command: string): Promise<string> {
+  async sendCommand(command: string): Promise<string> {
     if (!this.connected || !this.socket) {
       throw new Error('Not connected to kvlite');
     }
@@ -151,87 +143,6 @@ export class KVLiteClient extends EventEmitter {
     });
   }
 
-  /**
-   * SET key value
-   */
-  async set(key: string, value: string): Promise<boolean> {
-    const response = await this.sendCommand(`SET ${key} ${value}`);
-    return response === '+OK';
-  }
-
-  /**
-   * SETEX key seconds value - Set with TTL
-   */
-  async setex(key: string, seconds: number, value: string): Promise<boolean> {
-    const response = await this.sendCommand(`SETEX ${key} ${seconds} ${value}`);
-    return response === '+OK';
-  }
-
-  /**
-   * GET key
-   */
-  async get(key: string): Promise<string | null> {
-    const response = await this.sendCommand(`GET ${key}`);
-    if (response.startsWith('-ERR')) {
-      return null;
-    }
-    return response;
-  }
-
-  /**
-   * DELETE key
-   */
-  async delete(key: string): Promise<boolean> {
-    const response = await this.sendCommand(`DELETE ${key}`);
-    return response === '+OK';
-  }
-
-  /**
-   * EXISTS key
-   */
-  async exists(key: string): Promise<boolean> {
-    const response = await this.sendCommand(`EXISTS ${key}`);
-    return response === '1';
-  }
-
-  /**
-   * INCR key - Atomic increment
-   */
-  async incr(key: string): Promise<number> {
-    const response = await this.sendCommand(`INCR ${key}`);
-    if (response.startsWith('-ERR')) {
-      throw new Error(response);
-    }
-    return parseInt(response, 10);
-  }
-
-  /**
-   * TTL key - Returns seconds remaining, -1 if no TTL, -2 if not found
-   */
-  async ttl(key: string): Promise<number> {
-    const response = await this.sendCommand(`TTL ${key}`);
-    return parseInt(response, 10);
-  }
-
-  /**
-   * EXPIRE key seconds
-   */
-  async expire(key: string, seconds: number): Promise<boolean> {
-    const response = await this.sendCommand(`EXPIRE ${key} ${seconds}`);
-    return response === '1';
-  }
-
-  /**
-   * PING - Health check
-   */
-  async ping(): Promise<boolean> {
-    const response = await this.sendCommand('PING');
-    return response === '+PONG';
-  }
-
-  /**
-   * Close connection
-   */
   async close(): Promise<void> {
     if (this.socket && this.connected) {
       try {
@@ -245,21 +156,172 @@ export class KVLiteClient extends EventEmitter {
     }
   }
 
-  /**
-   * Check connection status
-   */
   isConnected(): boolean {
     return this.connected;
   }
 }
 
-// Singleton instance
-let clientInstance: KVLiteClient | null = null;
+/**
+ * KVLitePool manages a small pool of KVLiteConnections so concurrent callers
+ * don't share a single socket and its FIFO response queue. Each public method
+ * checks out a connection, runs the command, and returns it (even on error).
+ */
+export class KVLitePool {
+  private idle: KVLiteConnection[] = [];
+  private waiters: Array<(c: KVLiteConnection) => void> = [];
+  private created = 0;
+  private closed = false;
 
-export async function getKVLiteClient(): Promise<KVLiteClient> {
-  if (!clientInstance || !clientInstance.isConnected()) {
-    clientInstance = new KVLiteClient();
-    await clientInstance.connect();
+  constructor(
+    private host: string = config.kvlite.host,
+    private port: number = config.kvlite.port,
+    private maxConnections: number = config.kvlite.maxConnections
+  ) {}
+
+  private async acquire(): Promise<KVLiteConnection> {
+    if (this.closed) throw new Error('KVLitePool is closed');
+
+    const idle = this.idle.pop();
+    if (idle && idle.isConnected()) return idle;
+
+    if (this.created < this.maxConnections) {
+      this.created++;
+      try {
+        const c = new KVLiteConnection(this.host, this.port);
+        await c.connect();
+        return c;
+      } catch (e) {
+        this.created--;
+        throw e;
+      }
+    }
+
+    return new Promise<KVLiteConnection>((resolve) => {
+      this.waiters.push(resolve);
+    });
   }
-  return clientInstance;
+
+  private release(c: KVLiteConnection): void {
+    if (this.closed || !c.isConnected()) {
+      this.created--;
+      // If someone is waiting, give them a fresh connection.
+      const w = this.waiters.shift();
+      if (w) {
+        this.acquire()
+          .then(w)
+          .catch(() => {
+            // Best-effort: a waiter that can't be satisfied is left hanging
+            // until another release; in practice acquire() failures here are
+            // server-down scenarios and the request will time out.
+          });
+      }
+      return;
+    }
+    const w = this.waiters.shift();
+    if (w) {
+      w(c);
+    } else {
+      this.idle.push(c);
+    }
+  }
+
+  private async run<T>(fn: (c: KVLiteConnection) => Promise<T>): Promise<T> {
+    const c = await this.acquire();
+    try {
+      return await fn(c);
+    } finally {
+      this.release(c);
+    }
+  }
+
+  /**
+   * SET key value
+   */
+  async set(key: string, value: string): Promise<boolean> {
+    return this.run(async (c) => (await c.sendCommand(`SET ${key} ${value}`)) === '+OK');
+  }
+
+  /**
+   * SETEX key seconds value
+   */
+  async setex(key: string, seconds: number, value: string): Promise<boolean> {
+    return this.run(
+      async (c) => (await c.sendCommand(`SETEX ${key} ${seconds} ${value}`)) === '+OK'
+    );
+  }
+
+  /**
+   * GET key — returns null if the key doesn't exist
+   */
+  async get(key: string): Promise<string | null> {
+    return this.run(async (c) => {
+      const response = await c.sendCommand(`GET ${key}`);
+      if (response.startsWith('-ERR')) return null;
+      return response;
+    });
+  }
+
+  /**
+   * DELETE key
+   */
+  async delete(key: string): Promise<boolean> {
+    return this.run(async (c) => (await c.sendCommand(`DELETE ${key}`)) === '+OK');
+  }
+
+  /**
+   * EXISTS key
+   */
+  async exists(key: string): Promise<boolean> {
+    return this.run(async (c) => (await c.sendCommand(`EXISTS ${key}`)) === '1');
+  }
+
+  /**
+   * INCR key — atomic increment
+   */
+  async incr(key: string): Promise<number> {
+    return this.run(async (c) => {
+      const response = await c.sendCommand(`INCR ${key}`);
+      if (response.startsWith('-ERR')) throw new Error(response);
+      return parseInt(response, 10);
+    });
+  }
+
+  /**
+   * TTL key — seconds remaining, -1 if no TTL, -2 if not found
+   */
+  async ttl(key: string): Promise<number> {
+    return this.run(async (c) => parseInt(await c.sendCommand(`TTL ${key}`), 10));
+  }
+
+  /**
+   * EXPIRE key seconds
+   */
+  async expire(key: string, seconds: number): Promise<boolean> {
+    return this.run(
+      async (c) => (await c.sendCommand(`EXPIRE ${key} ${seconds}`)) === '1'
+    );
+  }
+
+  /**
+   * PING — health check
+   */
+  async ping(): Promise<boolean> {
+    return this.run(async (c) => (await c.sendCommand('PING')) === '+PONG');
+  }
+
+  async close(): Promise<void> {
+    this.closed = true;
+    const conns = this.idle.splice(0);
+    await Promise.all(conns.map((c) => c.close().catch(() => undefined)));
+  }
+}
+
+// Singleton pool reused across the process. Backed by maxConnections sockets.
+let poolInstance: KVLitePool | null = null;
+
+export async function getKVLiteClient(): Promise<KVLitePool> {
+  if (!poolInstance) {
+    poolInstance = new KVLitePool();
+  }
+  return poolInstance;
 }
