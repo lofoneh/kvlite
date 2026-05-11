@@ -3,6 +3,7 @@ package engine
 
 import (
 	"testing"
+	"time"
 )
 
 func TestEngine_SetAndGet(t *testing.T) {
@@ -208,6 +209,62 @@ func TestEngine_MultipleCycles(t *testing.T) {
 		if val != expected {
 			t.Errorf("Expected %s=%s, got %s", key, expected, val)
 		}
+	}
+}
+
+func TestEngine_TTLSurvivesWALReplay(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	e1, err := New(Options{WALPath: tmpDir})
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	if err := e1.SetWithTTL("ephemeral", "boom", 60*time.Second); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+	if err := e1.SetWithTTL("alreadyExpired", "stale", 1*time.Nanosecond); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond) // ensure alreadyExpired's expiration passes
+	e1.Close()
+
+	e2, err := New(Options{WALPath: tmpDir})
+	if err != nil {
+		t.Fatalf("Failed to recover engine: %v", err)
+	}
+	defer e2.Close()
+
+	if got := e2.TTL("ephemeral"); got <= 0 || got > 60*time.Second {
+		t.Errorf("ephemeral TTL after recovery = %v, want in (0, 60s]", got)
+	}
+	if _, ok := e2.Get("alreadyExpired"); ok {
+		t.Error("alreadyExpired should not survive recovery")
+	}
+}
+
+func TestEngine_TTLSurvivesCompaction(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	e1, err := New(Options{WALPath: tmpDir})
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	if err := e1.SetWithTTL("survivor", "alive", 5*time.Minute); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+	if err := e1.ForceCompact(); err != nil {
+		t.Fatalf("Compact: %v", err)
+	}
+	e1.Close()
+
+	e2, err := New(Options{WALPath: tmpDir})
+	if err != nil {
+		t.Fatalf("Failed to recover engine: %v", err)
+	}
+	defer e2.Close()
+
+	if got := e2.TTL("survivor"); got <= 0 || got > 5*time.Minute {
+		t.Errorf("survivor TTL after compact+restart = %v, want in (0, 5min]", got)
 	}
 }
 
