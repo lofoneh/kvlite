@@ -112,6 +112,16 @@ func (s *Server) Addr() string {
 	return s.cfg.Address()
 }
 
+// maxCommandSize is the largest single command line (key + value + framing)
+// the server will accept, in bytes. bufio.Scanner's 64KB default would
+// silently drop large SET payloads, so the buffer is sized up explicitly.
+const maxCommandSize = 4 * 1024 * 1024
+
+// Protocol caveat: the line-based wire format uses spaces as field separators
+// and \n as the record terminator. Values containing newlines are rejected by
+// the server (framing breaks); runs of spaces in values are collapsed. Encode
+// such values (e.g., base64) before SET if you need byte-exact round-trip.
+
 // handleConnection processes commands from a single client
 func (s *Server) handleConnection(conn net.Conn) {
 	defer func() {
@@ -124,6 +134,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 	log.Printf("client connected: %s", clientAddr)
 
 	scanner := bufio.NewScanner(conn)
+	scanner.Buffer(make([]byte, 64*1024), maxCommandSize)
 	writer := bufio.NewWriter(conn)
 
 	// Send welcome message
