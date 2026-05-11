@@ -69,41 +69,45 @@ func NewPool(opts PoolOptions) (*Pool, error) {
 	}, nil
 }
 
-// Get retrieves a connection from the pool
+// Get retrieves a connection from the pool.
+//
+// dial() is invoked without holding p.mu so a slow TCP connect doesn't block
+// every other Get/Put/Stats caller. The active-count slot is reserved before
+// releasing the mutex (and refunded on dial failure) so concurrent dialers
+// still respect maxActive.
 func (p *Pool) Get() (*Connection, error) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if p.closed {
+		p.mu.Unlock()
 		return nil, ErrPoolClosed
 	}
 
-	// Try to get idle connection
+	// Try to get an idle connection
 	select {
 	case conn := <-p.conns:
-		// Check if connection is still alive
 		if conn.isAlive() {
+			p.mu.Unlock()
 			return conn, nil
 		}
-		// Connection is dead, close it
 		conn.close()
 		p.active--
 	default:
-		// No idle connections
 	}
 
-	// Check if we can create new connection
 	if p.maxActive > 0 && p.active >= p.maxActive {
+		p.mu.Unlock()
 		return nil, errors.New("connection pool exhausted")
 	}
+	p.active++ // reserve the slot before releasing the lock
+	p.mu.Unlock()
 
-	// Create new connection
 	conn, err := p.dial()
 	if err != nil {
+		p.mu.Lock()
+		p.active--
+		p.mu.Unlock()
 		return nil, err
 	}
-
-	p.active++
 	return conn, nil
 }
 
@@ -230,26 +234,24 @@ func (c *Connection) close() {
 	}
 }
 
-// isAlive checks if connection is still valid
+// isAlive returns true if the connection still appears usable.
+// Uses an immediate-deadline read so no 100ms (or any) wait is incurred on
+// healthy idle connections: a timeout error means "no data buffered, alive";
+// EOF/RST or unexpected bytes mean dead.
 func (c *Connection) isAlive() bool {
 	if c.conn == nil {
 		return false
 	}
 
-	// Set a short deadline to check
-	_ = c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_ = c.conn.SetReadDeadline(time.Now())
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
-	// Try to read (should timeout immediately on healthy connection)
 	buf := make([]byte, 1)
 	_, err := c.conn.Read(buf)
 
-	// If we get a timeout, connection is alive
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		return true
 	}
-
-	// Any other error or successful read means connection is bad
 	return false
 }
 

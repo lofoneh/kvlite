@@ -4,7 +4,9 @@ package engine
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/lofoneh/kvlite/internal/analytics"
@@ -14,7 +16,14 @@ import (
 	"github.com/lofoneh/kvlite/internal/wal"
 )
 
-// Engine coordinates the in-memory store, WAL, snapshots, TTL, and analytics for persistence
+// Engine coordinates the in-memory store, WAL, snapshots, TTL, and analytics for persistence.
+//
+// Locking discipline:
+//   - mu (write) is held by every mutating operation (Set/Delete/Clear/SetWithTTL/atomic ops)
+//     for the WAL append + store update + counter bump. This makes each operation atomic with
+//     respect to Compact, which also takes mu (write).
+//   - mu (read) is held only for read-only inspection of compaction state.
+//   - Pure read paths (Get, Keys, Scan, ...) skip mu and rely on store.mu for safety.
 type Engine struct {
 	store            *store.Store
 	wal              *wal.WAL
@@ -22,19 +31,20 @@ type Engine struct {
 	ttlManager       *ttl.Manager
 	analytics        *analytics.Tracker
 	scheduler        *analytics.SmartScheduler
-	mu               sync.RWMutex // Protects compaction operations
+	mu               sync.RWMutex
 	compactionTicker *time.Ticker
 	stopCompaction   chan struct{}
+	compactionWG     sync.WaitGroup
 
 	// Compaction thresholds
 	maxWALEntries int64
 	maxWALSize    int64
-	walEntryCount int64 // Track number of entries
+	walEntryCount int64 // Track number of entries (guarded by mu)
 
 	// Analytics
 	enableAnalytics bool
-	requestCounter  int64
-	lastRateCheck   time.Time
+	requestCounter  atomic.Int64 // lock-free request counter for rate tracking
+	lastRateCheckNs atomic.Int64 // last rate-check timestamp (UnixNano)
 }
 
 // Options for creating an Engine
@@ -110,8 +120,8 @@ func New(opts Options) (*Engine, error) {
 		maxWALSize:      opts.MaxWALSize,
 		stopCompaction:  make(chan struct{}),
 		enableAnalytics: opts.EnableAnalytics,
-		lastRateCheck:   time.Now(),
 	}
+	engine.lastRateCheckNs.Store(time.Now().UnixNano())
 
 	// Recover from snapshot and WAL
 	if err := engine.recover(opts.WALPath); err != nil {
@@ -121,6 +131,7 @@ func New(opts Options) (*Engine, error) {
 
 	// Start background processes
 	engine.compactionTicker = time.NewTicker(opts.CompactionInterval)
+	engine.compactionWG.Add(1)
 	go engine.compactionLoop()
 
 	ttlMgr.Start()
@@ -140,10 +151,21 @@ func (e *Engine) recover(path string) error {
 
 	if snap != nil {
 		log.Printf("Loading snapshot with %d keys...", snap.KeyCount)
-		for key, value := range snap.Data {
-			e.store.Set(key, value)
+		now := time.Now().UnixNano()
+		skipped := 0
+		for key, entry := range snap.Data {
+			if entry.ExpiresAt == 0 {
+				e.store.Set(key, entry.Value)
+				continue
+			}
+			remaining := entry.ExpiresAt - now
+			if remaining <= 0 {
+				skipped++
+				continue
+			}
+			e.store.SetWithTTL(key, entry.Value, time.Duration(remaining))
 		}
-		log.Printf("Snapshot loaded: %d keys", snap.KeyCount)
+		log.Printf("Snapshot loaded: %d keys (%d expired and skipped)", snap.KeyCount-skipped, skipped)
 	} else {
 		log.Println("No snapshot found, starting fresh")
 	}
@@ -154,7 +176,15 @@ func (e *Engine) recover(path string) error {
 	err = e.wal.Replay(func(record *wal.Record) error {
 		switch record.Op {
 		case wal.OpSet:
-			e.store.Set(record.Key, record.Value)
+			if record.ExpiresAt == 0 {
+				e.store.Set(record.Key, record.Value)
+			} else {
+				remaining := record.ExpiresAt - time.Now().UnixNano()
+				if remaining > 0 {
+					e.store.SetWithTTL(record.Key, record.Value, time.Duration(remaining))
+				}
+				// already expired: skip (consistent with lazy expiration semantics)
+			}
 		case wal.OpDelete:
 			e.store.Delete(record.Key)
 		case wal.OpClear:
@@ -176,28 +206,24 @@ func (e *Engine) recover(path string) error {
 	return nil
 }
 
-// Set stores a key-value pair and writes to WAL
+// Set stores a key-value pair and writes to WAL.
+// Holds the engine write lock so the WAL append + store update are atomic
+// with respect to compaction.
 func (e *Engine) Set(key, value string) error {
-	// Record analytics
 	if e.enableAnalytics && e.analytics != nil {
 		e.analytics.RecordWrite(key)
 		e.trackRequestRate()
 	}
 
-	// Write to WAL first (durability)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	record := wal.NewRecord(wal.OpSet, key, value)
 	if err := e.wal.Write(record); err != nil {
 		return fmt.Errorf("failed to write to WAL: %w", err)
 	}
-
-	// Then update in-memory store
 	e.store.Set(key, value)
-
-	// Increment WAL entry count
-	e.mu.Lock()
 	e.walEntryCount++
-	e.mu.Unlock()
-
 	return nil
 }
 
@@ -212,28 +238,89 @@ func (e *Engine) Get(key string) (string, bool) {
 	return e.store.Get(key) // Store handles lazy expiration
 }
 
-// SetWithTTL stores a key-value pair with TTL and writes to WAL
+// SetWithTTL stores a key-value pair with TTL and writes to WAL.
+// The TTL is encoded into the WAL record so it survives restarts and compaction.
 func (e *Engine) SetWithTTL(key, value string, ttl time.Duration) error {
-	// Write to WAL first (durability)
-	record := wal.NewRecord(wal.OpSet, key, value)
+	if e.enableAnalytics && e.analytics != nil {
+		e.analytics.RecordWrite(key)
+		e.trackRequestRate()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record := wal.NewRecordWithTTL(wal.OpSet, key, value, ttl)
 	if err := e.wal.Write(record); err != nil {
 		return fmt.Errorf("failed to write to WAL: %w", err)
 	}
-
-	// Then update in-memory store with TTL
 	e.store.SetWithTTL(key, value, ttl)
-
-	// Increment WAL entry count
-	e.mu.Lock()
 	e.walEntryCount++
-	e.mu.Unlock()
-
 	return nil
 }
 
 // Expire sets TTL on an existing key
 func (e *Engine) Expire(key string, ttl time.Duration) bool {
 	return e.store.Expire(key, ttl)
+}
+
+// IncrBy atomically adjusts the integer value of key by delta and returns the
+// new value. Missing keys are treated as 0. Non-integer values return an error.
+// The new value is written to the WAL before the in-memory store is updated.
+// Note: TTL is not preserved (matches prior Set-based behavior).
+func (e *Engine) IncrBy(key string, delta int64) (int64, error) {
+	if e.enableAnalytics && e.analytics != nil {
+		e.analytics.RecordWrite(key)
+		e.trackRequestRate()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	current := int64(0)
+	if entry, ok := e.store.GetEntry(key); ok {
+		parsed, err := strconv.ParseInt(entry.Value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("value is not an integer")
+		}
+		current = parsed
+	}
+	newVal := current + delta
+	newStr := strconv.FormatInt(newVal, 10)
+
+	record := wal.NewRecord(wal.OpSet, key, newStr)
+	if err := e.wal.Write(record); err != nil {
+		return 0, fmt.Errorf("failed to write to WAL: %w", err)
+	}
+	e.store.Set(key, newStr)
+	e.walEntryCount++
+	return newVal, nil
+}
+
+// Append atomically appends suffix to the value at key and returns the new
+// total length. Missing keys start from "". The result is WAL-logged.
+// Note: TTL is not preserved (matches prior Set-based behavior).
+func (e *Engine) Append(key, suffix string) (int, error) {
+	if e.enableAnalytics && e.analytics != nil {
+		e.analytics.RecordWrite(key)
+		e.trackRequestRate()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	current := ""
+	if entry, ok := e.store.GetEntry(key); ok {
+		current = entry.Value
+	}
+	newVal := current + suffix
+
+	record := wal.NewRecord(wal.OpSet, key, newVal)
+	if err := e.wal.Write(record); err != nil {
+		return 0, fmt.Errorf("failed to write to WAL: %w", err)
+	}
+	e.store.Set(key, newVal)
+	e.walEntryCount++
+	return len(newVal), nil
 }
 
 // Persist removes TTL from a key
@@ -258,45 +345,33 @@ func (e *Engine) Scan(cursor int, pattern string, count int) (int, []string, boo
 
 // Delete removes a key-value pair and writes to WAL
 func (e *Engine) Delete(key string) (bool, error) {
-	// Check if key exists
-	_, exists := e.store.Get(key)
-	if !exists {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if _, exists := e.store.GetEntry(key); !exists {
 		return false, nil
 	}
 
-	// Write to WAL first
 	record := wal.NewRecord(wal.OpDelete, key, "")
 	if err := e.wal.Write(record); err != nil {
 		return false, fmt.Errorf("failed to write to WAL: %w", err)
 	}
-
-	// Then delete from in-memory store
 	e.store.Delete(key)
-
-	// Increment WAL entry count
-	e.mu.Lock()
 	e.walEntryCount++
-	e.mu.Unlock()
-
 	return true, nil
 }
 
 // Clear removes all keys and writes to WAL
 func (e *Engine) Clear() error {
-	// Write to WAL first
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	record := wal.NewRecord(wal.OpClear, "", "")
 	if err := e.wal.Write(record); err != nil {
 		return fmt.Errorf("failed to write to WAL: %w", err)
 	}
-
-	// Then clear in-memory store
 	e.store.Clear()
-
-	// Increment WAL entry count
-	e.mu.Lock()
 	e.walEntryCount++
-	e.mu.Unlock()
-
 	return nil
 }
 
@@ -310,20 +385,21 @@ func (e *Engine) Sync() error {
 	return e.wal.Sync()
 }
 
-// Close closes the engine, WAL, and TTL manager
+// Close closes the engine, WAL, and TTL manager.
+// Waits for any in-flight compaction to finish before closing the WAL so
+// the file isn't yanked out from under a running snapshot+truncate.
 func (e *Engine) Close() error {
 	log.Println("Closing engine...")
 
-	// Stop TTL manager
 	if e.ttlManager != nil {
 		e.ttlManager.Stop()
 	}
 
-	// Stop compaction loop
 	close(e.stopCompaction)
 	if e.compactionTicker != nil {
 		e.compactionTicker.Stop()
 	}
+	e.compactionWG.Wait()
 
 	if err := e.wal.Close(); err != nil {
 		return fmt.Errorf("failed to close WAL: %w", err)
@@ -344,6 +420,7 @@ func (e *Engine) WALPath() string {
 
 // compactionLoop runs in the background and triggers compaction when needed
 func (e *Engine) compactionLoop() {
+	defer e.compactionWG.Done()
 	for {
 		select {
 		case <-e.compactionTicker.C:
@@ -408,14 +485,16 @@ func (e *Engine) Compact() error {
 	keyCount := e.store.Len()
 	walSizeBefore, _ := e.wal.Size()
 
-	// Get current store state
-	data := make(map[string]string)
-	e.store.Range(func(key, value string) bool {
-		data[key] = value
+	// Get current store state including TTL.
+	data := make(map[string]snapshot.EntryData)
+	e.store.RangeWithTTL(func(key string, entry *store.Entry) bool {
+		data[key] = snapshot.EntryData{
+			Value:     entry.Value,
+			ExpiresAt: entry.ExpiresAt,
+		}
 		return true
 	})
 
-	// Create snapshot (atomic write)
 	if err := e.snapshotWriter.Create(data); err != nil {
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
@@ -498,26 +577,29 @@ func (e *Engine) CompactionStats() map[string]interface{} {
 	return stats
 }
 
-// trackRequestRate tracks request rate for smart scheduling
+// trackRequestRate tracks request rate for smart scheduling.
+// Lock-free so it can be called from inside Set/SetWithTTL without re-entering e.mu.
 func (e *Engine) trackRequestRate() {
 	if !e.enableAnalytics || e.scheduler == nil {
 		return
 	}
 
-	e.mu.Lock()
-	e.requestCounter++
+	count := e.requestCounter.Add(1)
+	nowNs := time.Now().UnixNano()
+	lastNs := e.lastRateCheckNs.Load()
+	elapsedNs := nowNs - lastNs
 
-	// Calculate rate every second
-	now := time.Now()
-	elapsed := now.Sub(e.lastRateCheck)
-
-	if elapsed >= 1*time.Second {
-		rate := float64(e.requestCounter) / elapsed.Seconds()
-		e.scheduler.RecordRequestRate(rate)
-		e.requestCounter = 0
-		e.lastRateCheck = now
+	if elapsedNs < int64(time.Second) {
+		return
 	}
-	e.mu.Unlock()
+
+	// Only one goroutine wins the swap and records the rate; the rest skip.
+	if !e.lastRateCheckNs.CompareAndSwap(lastNs, nowNs) {
+		return
+	}
+	rate := float64(count) / (float64(elapsedNs) / float64(time.Second))
+	e.scheduler.RecordRequestRate(rate)
+	e.requestCounter.Store(0)
 }
 
 // GetKeyStats returns analytics for a specific key
