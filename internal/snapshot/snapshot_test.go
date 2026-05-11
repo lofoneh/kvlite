@@ -17,10 +17,10 @@ func TestSnapshot_CreateAndLoad(t *testing.T) {
 	}
 
 	// Create test data
-	data := map[string]string{
-		"key1": "value1",
-		"key2": "value2",
-		"key3": "value3",
+	data := map[string]EntryData{
+		"key1": {Value: "value1"},
+		"key2": {Value: "value2"},
+		"key3": {Value: "value3"},
 	}
 
 	// Create snapshot
@@ -44,7 +44,7 @@ func TestSnapshot_CreateAndLoad(t *testing.T) {
 
 	for k, v := range data {
 		if snapshot.Data[k] != v {
-			t.Errorf("Key %s: expected %s, got %s", k, v, snapshot.Data[k])
+			t.Errorf("Key %s: expected %v, got %v", k, v, snapshot.Data[k])
 		}
 	}
 }
@@ -57,7 +57,7 @@ func TestSnapshot_AtomicWrite(t *testing.T) {
 		t.Fatalf("Failed to create writer: %v", err)
 	}
 
-	data := map[string]string{"key": "value"}
+	data := map[string]EntryData{"key": {Value: "value"}}
 
 	// Create first snapshot
 	if err := writer.Create(data); err != nil {
@@ -65,7 +65,7 @@ func TestSnapshot_AtomicWrite(t *testing.T) {
 	}
 
 	// Create second snapshot (should replace first atomically)
-	data2 := map[string]string{"key": "value2", "key2": "value2"}
+	data2 := map[string]EntryData{"key": {Value: "value2"}, "key2": {Value: "value2"}}
 	if err := writer.Create(data2); err != nil {
 		t.Fatalf("Failed to create second snapshot: %v", err)
 	}
@@ -76,8 +76,8 @@ func TestSnapshot_AtomicWrite(t *testing.T) {
 		t.Fatalf("Failed to load snapshot: %v", err)
 	}
 
-	if snapshot.Data["key"] != "value2" {
-		t.Errorf("Expected value2, got %s", snapshot.Data["key"])
+	if snapshot.Data["key"].Value != "value2" {
+		t.Errorf("Expected value2, got %s", snapshot.Data["key"].Value)
 	}
 
 	if len(snapshot.Data) != 2 {
@@ -120,7 +120,7 @@ func TestSnapshot_Exists(t *testing.T) {
 
 	// Create snapshot
 	writer, _ := NewWriter(Options{Path: tmpDir})
-	data := map[string]string{"key": "value"}
+	data := map[string]EntryData{"key": {Value: "value"}}
 	_ = writer.Create(data)
 
 	// Now should exist
@@ -133,7 +133,7 @@ func TestSnapshot_Delete(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
-	data := map[string]string{"key": "value"}
+	data := map[string]EntryData{"key": {Value: "value"}}
 	_ = writer.Create(data)
 
 	// Delete snapshot
@@ -156,9 +156,9 @@ func TestSnapshot_Size(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
-	data := map[string]string{
-		"key1": "value1",
-		"key2": "value2",
+	data := map[string]EntryData{
+		"key1": {Value: "value1"},
+		"key2": {Value: "value2"},
 	}
 	_ = writer.Create(data)
 
@@ -176,10 +176,10 @@ func TestSnapshot_Info(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
-	data := map[string]string{
-		"key1": "value1",
-		"key2": "value2",
-		"key3": "value3",
+	data := map[string]EntryData{
+		"key1": {Value: "value1"},
+		"key2": {Value: "value2"},
+		"key3": {Value: "value3"},
 	}
 	_ = writer.Create(data)
 
@@ -197,8 +197,8 @@ func TestSnapshot_Info(t *testing.T) {
 		t.Errorf("Expected 3 keys, got %d", info.KeyCount)
 	}
 
-	if info.Version != 1 {
-		t.Errorf("Expected version 1, got %d", info.Version)
+	if info.Version != CurrentVersion {
+		t.Errorf("Expected version %d, got %d", CurrentVersion, info.Version)
 	}
 
 	if info.Size == 0 {
@@ -210,30 +210,27 @@ func TestSnapshot_ExportImport(t *testing.T) {
 	tmpDir := t.TempDir()
 	exportPath := filepath.Join(tmpDir, "export.json")
 
-	data := map[string]string{
-		"key1": "value1",
-		"key2": "value2",
+	data := map[string]EntryData{
+		"key1": {Value: "value1"},
+		"key2": {Value: "value2", ExpiresAt: 1234567890},
 	}
 
-	// Export
 	if err := Export(data, exportPath); err != nil {
 		t.Fatalf("Failed to export: %v", err)
 	}
 
-	// Import
 	imported, err := Import(exportPath)
 	if err != nil {
 		t.Fatalf("Failed to import: %v", err)
 	}
 
-	// Verify
 	if len(imported) != len(data) {
 		t.Errorf("Expected %d keys, got %d", len(data), len(imported))
 	}
 
 	for k, v := range data {
 		if imported[k] != v {
-			t.Errorf("Key %s: expected %s, got %s", k, v, imported[k])
+			t.Errorf("Key %s: expected %v, got %v", k, v, imported[k])
 		}
 	}
 }
@@ -242,7 +239,7 @@ func TestSnapshot_Verify(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
-	data := map[string]string{"key": "value"}
+	data := map[string]EntryData{"key": {Value: "value"}}
 	_ = writer.Create(data)
 
 	// Verify valid snapshot
@@ -262,11 +259,11 @@ func TestSnapshot_LargeDataset(t *testing.T) {
 	writer, _ := NewWriter(Options{Path: tmpDir})
 
 	// Create large dataset
-	data := make(map[string]string)
+	data := make(map[string]EntryData)
 	for i := 0; i < 10000; i++ {
 		key := fmt.Sprintf("key%d", i)
 		value := fmt.Sprintf("value%d", i)
-		data[key] = value
+		data[key] = EntryData{Value: value}
 	}
 
 	// Create snapshot
@@ -289,7 +286,7 @@ func TestSnapshot_EmptyData(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	writer, _ := NewWriter(Options{Path: tmpDir})
-	data := make(map[string]string)
+	data := make(map[string]EntryData)
 
 	if err := writer.Create(data); err != nil {
 		t.Fatalf("Failed to create empty snapshot: %v", err)
@@ -309,9 +306,9 @@ func BenchmarkSnapshot_Create(b *testing.B) {
 	tmpDir := b.TempDir()
 	writer, _ := NewWriter(Options{Path: tmpDir})
 
-	data := make(map[string]string)
+	data := make(map[string]EntryData)
 	for i := 0; i < 1000; i++ {
-		data[fmt.Sprintf("key%d", i)] = fmt.Sprintf("value%d", i)
+		data[fmt.Sprintf("key%d", i)] = EntryData{Value: fmt.Sprintf("value%d", i)}
 	}
 
 	b.ResetTimer()
@@ -324,9 +321,9 @@ func BenchmarkSnapshot_Load(b *testing.B) {
 	tmpDir := b.TempDir()
 	writer, _ := NewWriter(Options{Path: tmpDir})
 
-	data := make(map[string]string)
+	data := make(map[string]EntryData)
 	for i := 0; i < 1000; i++ {
-		data[fmt.Sprintf("key%d", i)] = fmt.Sprintf("value%d", i)
+		data[fmt.Sprintf("key%d", i)] = EntryData{Value: fmt.Sprintf("value%d", i)}
 	}
 	_ = writer.Create(data)
 

@@ -150,10 +150,21 @@ func (e *Engine) recover(path string) error {
 
 	if snap != nil {
 		log.Printf("Loading snapshot with %d keys...", snap.KeyCount)
-		for key, value := range snap.Data {
-			e.store.Set(key, value)
+		now := time.Now().UnixNano()
+		skipped := 0
+		for key, entry := range snap.Data {
+			if entry.ExpiresAt == 0 {
+				e.store.Set(key, entry.Value)
+				continue
+			}
+			remaining := entry.ExpiresAt - now
+			if remaining <= 0 {
+				skipped++
+				continue
+			}
+			e.store.SetWithTTL(key, entry.Value, time.Duration(remaining))
 		}
-		log.Printf("Snapshot loaded: %d keys", snap.KeyCount)
+		log.Printf("Snapshot loaded: %d keys (%d expired and skipped)", snap.KeyCount-skipped, skipped)
 	} else {
 		log.Println("No snapshot found, starting fresh")
 	}
@@ -164,7 +175,15 @@ func (e *Engine) recover(path string) error {
 	err = e.wal.Replay(func(record *wal.Record) error {
 		switch record.Op {
 		case wal.OpSet:
-			e.store.Set(record.Key, record.Value)
+			if record.ExpiresAt == 0 {
+				e.store.Set(record.Key, record.Value)
+			} else {
+				remaining := record.ExpiresAt - time.Now().UnixNano()
+				if remaining > 0 {
+					e.store.SetWithTTL(record.Key, record.Value, time.Duration(remaining))
+				}
+				// already expired: skip (consistent with lazy expiration semantics)
+			}
 		case wal.OpDelete:
 			e.store.Delete(record.Key)
 		case wal.OpClear:
@@ -219,7 +238,7 @@ func (e *Engine) Get(key string) (string, bool) {
 }
 
 // SetWithTTL stores a key-value pair with TTL and writes to WAL.
-// NOTE: TTL is not yet persisted in the WAL — fix #2 adds that.
+// The TTL is encoded into the WAL record so it survives restarts and compaction.
 func (e *Engine) SetWithTTL(key, value string, ttl time.Duration) error {
 	if e.enableAnalytics && e.analytics != nil {
 		e.analytics.RecordWrite(key)
@@ -229,7 +248,7 @@ func (e *Engine) SetWithTTL(key, value string, ttl time.Duration) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	record := wal.NewRecord(wal.OpSet, key, value)
+	record := wal.NewRecordWithTTL(wal.OpSet, key, value, ttl)
 	if err := e.wal.Write(record); err != nil {
 		return fmt.Errorf("failed to write to WAL: %w", err)
 	}
@@ -404,14 +423,16 @@ func (e *Engine) Compact() error {
 	keyCount := e.store.Len()
 	walSizeBefore, _ := e.wal.Size()
 
-	// Get current store state
-	data := make(map[string]string)
-	e.store.Range(func(key, value string) bool {
-		data[key] = value
+	// Get current store state including TTL.
+	data := make(map[string]snapshot.EntryData)
+	e.store.RangeWithTTL(func(key string, entry *store.Entry) bool {
+		data[key] = snapshot.EntryData{
+			Value:     entry.Value,
+			ExpiresAt: entry.ExpiresAt,
+		}
 		return true
 	})
 
-	// Create snapshot (atomic write)
 	if err := e.snapshotWriter.Create(data); err != nil {
 		return fmt.Errorf("failed to create snapshot: %w", err)
 	}
