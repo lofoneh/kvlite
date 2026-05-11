@@ -230,26 +230,24 @@ func (c *Connection) close() {
 	}
 }
 
-// isAlive checks if connection is still valid
+// isAlive returns true if the connection still appears usable.
+// Uses an immediate-deadline read so no 100ms (or any) wait is incurred on
+// healthy idle connections: a timeout error means "no data buffered, alive";
+// EOF/RST or unexpected bytes mean dead.
 func (c *Connection) isAlive() bool {
 	if c.conn == nil {
 		return false
 	}
 
-	// Set a short deadline to check
-	_ = c.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	_ = c.conn.SetReadDeadline(time.Now())
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 
-	// Try to read (should timeout immediately on healthy connection)
 	buf := make([]byte, 1)
 	_, err := c.conn.Read(buf)
 
-	// If we get a timeout, connection is alive
 	if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
 		return true
 	}
-
-	// Any other error or successful read means connection is bad
 	return false
 }
 
