@@ -4,6 +4,7 @@ package engine
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -260,6 +261,66 @@ func (e *Engine) SetWithTTL(key, value string, ttl time.Duration) error {
 // Expire sets TTL on an existing key
 func (e *Engine) Expire(key string, ttl time.Duration) bool {
 	return e.store.Expire(key, ttl)
+}
+
+// IncrBy atomically adjusts the integer value of key by delta and returns the
+// new value. Missing keys are treated as 0. Non-integer values return an error.
+// The new value is written to the WAL before the in-memory store is updated.
+// Note: TTL is not preserved (matches prior Set-based behavior).
+func (e *Engine) IncrBy(key string, delta int64) (int64, error) {
+	if e.enableAnalytics && e.analytics != nil {
+		e.analytics.RecordWrite(key)
+		e.trackRequestRate()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	current := int64(0)
+	if entry, ok := e.store.GetEntry(key); ok {
+		parsed, err := strconv.ParseInt(entry.Value, 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("value is not an integer")
+		}
+		current = parsed
+	}
+	newVal := current + delta
+	newStr := strconv.FormatInt(newVal, 10)
+
+	record := wal.NewRecord(wal.OpSet, key, newStr)
+	if err := e.wal.Write(record); err != nil {
+		return 0, fmt.Errorf("failed to write to WAL: %w", err)
+	}
+	e.store.Set(key, newStr)
+	e.walEntryCount++
+	return newVal, nil
+}
+
+// Append atomically appends suffix to the value at key and returns the new
+// total length. Missing keys start from "". The result is WAL-logged.
+// Note: TTL is not preserved (matches prior Set-based behavior).
+func (e *Engine) Append(key, suffix string) (int, error) {
+	if e.enableAnalytics && e.analytics != nil {
+		e.analytics.RecordWrite(key)
+		e.trackRequestRate()
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	current := ""
+	if entry, ok := e.store.GetEntry(key); ok {
+		current = entry.Value
+	}
+	newVal := current + suffix
+
+	record := wal.NewRecord(wal.OpSet, key, newVal)
+	if err := e.wal.Write(record); err != nil {
+		return 0, fmt.Errorf("failed to write to WAL: %w", err)
+	}
+	e.store.Set(key, newVal)
+	e.walEntryCount++
+	return len(newVal), nil
 }
 
 // Persist removes TTL from a key

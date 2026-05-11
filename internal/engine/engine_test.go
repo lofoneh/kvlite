@@ -2,6 +2,8 @@
 package engine
 
 import (
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 )
@@ -265,6 +267,54 @@ func TestEngine_TTLSurvivesCompaction(t *testing.T) {
 
 	if got := e2.TTL("survivor"); got <= 0 || got > 5*time.Minute {
 		t.Errorf("survivor TTL after compact+restart = %v, want in (0, 5min]", got)
+	}
+}
+
+func TestEngine_IncrByIsAtomic(t *testing.T) {
+	tmpDir := t.TempDir()
+	engine, err := New(Options{WALPath: tmpDir})
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer engine.Close()
+
+	const goroutines = 50
+	const perGoroutine = 200
+	const total = goroutines * perGoroutine
+
+	var wg sync.WaitGroup
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < perGoroutine; j++ {
+				if _, err := engine.IncrBy("counter", 1); err != nil {
+					t.Errorf("IncrBy: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	val, ok := engine.Get("counter")
+	if !ok {
+		t.Fatal("counter should exist")
+	}
+	got, _ := strconv.ParseInt(val, 10, 64)
+	if got != int64(total) {
+		t.Errorf("counter = %d, want %d (lost updates under concurrent INCR)", got, total)
+	}
+}
+
+func TestEngine_IncrByNonInteger(t *testing.T) {
+	tmpDir := t.TempDir()
+	engine, _ := New(Options{WALPath: tmpDir})
+	defer engine.Close()
+
+	_ = engine.Set("k", "not-a-number")
+	if _, err := engine.IncrBy("k", 1); err == nil {
+		t.Error("expected error incrementing non-integer value")
 	}
 }
 
