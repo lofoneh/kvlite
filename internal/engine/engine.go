@@ -385,20 +385,21 @@ func (e *Engine) Sync() error {
 	return e.wal.Sync()
 }
 
-// Close closes the engine, WAL, and TTL manager
+// Close closes the engine, WAL, and TTL manager.
+// Waits for any in-flight compaction to finish before closing the WAL so
+// the file isn't yanked out from under a running snapshot+truncate.
 func (e *Engine) Close() error {
 	log.Println("Closing engine...")
 
-	// Stop TTL manager
 	if e.ttlManager != nil {
 		e.ttlManager.Stop()
 	}
 
-	// Stop compaction loop
 	close(e.stopCompaction)
 	if e.compactionTicker != nil {
 		e.compactionTicker.Stop()
 	}
+	e.compactionWG.Wait()
 
 	if err := e.wal.Close(); err != nil {
 		return fmt.Errorf("failed to close WAL: %w", err)
