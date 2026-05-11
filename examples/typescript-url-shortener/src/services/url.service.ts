@@ -1,4 +1,4 @@
-import { getKVLiteClient, KVLiteClient } from '../kvlite-client';
+import { getKVLiteClient, KVLitePool } from '../kvlite-client';
 import { config } from '../config';
 import {
   UrlMapping,
@@ -13,10 +13,10 @@ import { generateShortCode, isValidShortCode, isValidUrl } from '../utils/shortc
  * Demonstrates kvlite patterns: SETEX, GET, DELETE, EXISTS, INCR, TTL
  */
 export class UrlService {
-  private client: KVLiteClient | null = null;
+  private client: KVLitePool | null = null;
 
-  private async getClient(): Promise<KVLiteClient> {
-    if (!this.client || !this.client.isConnected()) {
+  private async getClient(): Promise<KVLitePool> {
+    if (!this.client) {
       this.client = await getKVLiteClient();
     }
     return this.client;

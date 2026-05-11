@@ -14,6 +14,7 @@ export const config = {
     connectionTimeout: 5000,
     commandTimeout: 3000,
     logging: process.env.KVLITE_LOGGING !== 'false', // Enable by default
+    maxConnections: parseInt(process.env.KVLITE_MAX_CONNECTIONS || '10', 10),
   },
 
   // URL shortener settings

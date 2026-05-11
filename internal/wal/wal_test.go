@@ -4,6 +4,7 @@ package wal
 import (
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestRecord_EncodeDecodeValidate(t *testing.T) {
@@ -56,6 +57,36 @@ func TestRecord_EncodeDecodeValidate(t *testing.T) {
 				t.Errorf("Checksum mismatch: got %v, want %v", decoded.Checksum, record.Checksum)
 			}
 		})
+	}
+}
+
+func TestRecord_TTLRoundTrip(t *testing.T) {
+	ttl := 30 * time.Second
+	record := NewRecordWithTTL(OpSet, "key", "value", ttl)
+
+	if record.ExpiresAt == 0 {
+		t.Fatal("expected ExpiresAt to be set")
+	}
+
+	encoded := record.Encode()
+	decoded, err := Decode(encoded)
+	if err != nil {
+		t.Fatalf("Decode failed: %v", err)
+	}
+	if decoded.ExpiresAt != record.ExpiresAt {
+		t.Errorf("ExpiresAt mismatch: got %d, want %d", decoded.ExpiresAt, record.ExpiresAt)
+	}
+	if decoded.TTL() <= 0 || decoded.TTL() > ttl {
+		t.Errorf("TTL out of expected range: got %v", decoded.TTL())
+	}
+}
+
+func TestDecode_RejectsLegacyV1Format(t *testing.T) {
+	// 5-field v1 record: timestamp|op|key|value|checksum
+	legacy := "1|SET|k|v|0\n"
+	_, err := Decode(legacy)
+	if err == nil {
+		t.Fatal("expected error decoding legacy v1 record, got nil")
 	}
 }
 
