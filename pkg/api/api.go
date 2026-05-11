@@ -550,57 +550,21 @@ func (s *Server) processCommand(line string) string {
 		if len(parts) < 2 {
 			return "-ERR INCR requires key"
 		}
-		key := parts[1]
-
-		// Get current value
-		val, exists := s.engine.Get(key)
-		current := int64(0)
-
-		if exists {
-			var err error
-			current, err = strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return "-ERR value is not an integer"
-			}
+		newVal, err := s.engine.IncrBy(parts[1], 1)
+		if err != nil {
+			return fmt.Sprintf("-ERR %s", err.Error())
 		}
-
-		// Increment
-		current++
-		newVal := strconv.FormatInt(current, 10)
-
-		if err := s.engine.Set(key, newVal); err != nil {
-			return fmt.Sprintf("-ERR failed to set: %v", err)
-		}
-
-		return fmt.Sprintf("%d", current)
+		return fmt.Sprintf("%d", newVal)
 
 	case "DECR":
 		if len(parts) < 2 {
 			return "-ERR DECR requires key"
 		}
-		key := parts[1]
-
-		// Get current value
-		val, exists := s.engine.Get(key)
-		current := int64(0)
-
-		if exists {
-			var err error
-			current, err = strconv.ParseInt(val, 10, 64)
-			if err != nil {
-				return "-ERR value is not an integer"
-			}
+		newVal, err := s.engine.IncrBy(parts[1], -1)
+		if err != nil {
+			return fmt.Sprintf("-ERR %s", err.Error())
 		}
-
-		// Decrement
-		current--
-		newVal := strconv.FormatInt(current, 10)
-
-		if err := s.engine.Set(key, newVal); err != nil {
-			return fmt.Sprintf("-ERR failed to set: %v", err)
-		}
-
-		return fmt.Sprintf("%d", current)
+		return fmt.Sprintf("%d", newVal)
 
 	case "APPEND":
 		if len(parts) < 3 {
@@ -608,20 +572,11 @@ func (s *Server) processCommand(line string) string {
 		}
 		key := parts[1]
 		appendVal := strings.Join(parts[2:], " ")
-
-		// Get current value
-		val, exists := s.engine.Get(key)
-		if !exists {
-			val = ""
+		newLen, err := s.engine.Append(key, appendVal)
+		if err != nil {
+			return fmt.Sprintf("-ERR %s", err.Error())
 		}
-
-		// Append
-		newVal := val + appendVal
-		if err := s.engine.Set(key, newVal); err != nil {
-			return fmt.Sprintf("-ERR failed to set: %v", err)
-		}
-
-		return fmt.Sprintf("%d", len(newVal))
+		return fmt.Sprintf("%d", newLen)
 
 	case "STRLEN":
 		if len(parts) < 2 {
