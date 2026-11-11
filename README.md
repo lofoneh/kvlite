@@ -5,11 +5,11 @@
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
-A fast, lightweight in-memory key-value store written in Go with persistence, TTL support, and AI-powered analytics.
+A fast, lightweight in-memory key-value store written in Go with persistence, TTL support, and access-pattern analytics.
 
 ## Features
 
-- **High Performance**: Sub-microsecond GET operations, ~45M ops/sec
+- **Performance**: about 40-55 ns per in-process GET; about 75k GETs a second over TCP on one connection (see [Benchmarks](#benchmarks))
 - **Persistence**: Write-Ahead Log (WAL) with crash recovery
 - **TTL Support**: Per-key expiration with lazy and background cleanup
 - **Snapshots**: Point-in-time snapshots for efficient compaction
@@ -203,11 +203,16 @@ make check
 
 ## Benchmarks
 
+Measured with `go test -bench . -benchmem` on an Intel Core 7 150U (4 CPUs, Go 1.26, Docker), Nov 2026.
+Store and Engine run in-process; Client goes over TCP on loopback, one request at a time.
+
 ```
-BenchmarkStore_Set-8        50000000    25.3 ns/op    0 B/op    0 allocs/op
-BenchmarkStore_Get-8        100000000   10.2 ns/op    0 B/op    0 allocs/op
-BenchmarkEngine_Set-8       500000      2145 ns/op    48 B/op   1 allocs/op
-BenchmarkEngine_Get-8       50000000    28.4 ns/op    0 B/op    0 allocs/op
+BenchmarkStore_Get     40.9 ns/op     0 B/op    0 allocs/op
+BenchmarkStore_Set     73.9 ns/op    24 B/op    1 allocs/op
+BenchmarkEngine_Get    54.8 ns/op     0 B/op    0 allocs/op
+BenchmarkEngine_Set    2808 ns/op   368 B/op   14 allocs/op   (WAL write)
+BenchmarkClient_Get   13257 ns/op   176 B/op    8 allocs/op   (TCP)
+BenchmarkClient_Set   17912 ns/op   581 B/op   23 allocs/op   (TCP)
 ```
 
 ## Documentation
